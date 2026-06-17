@@ -14,6 +14,7 @@ const supabase = createClient(
     process.env.REACT_APP_SUPABASE_ANON_KEY
 );
 
+
 const AIAgentPage = ({ user, onPageChange, onLogout, documentsUploaded = true }) => {
     // State management
     const [messages, setMessages] = useState([]);

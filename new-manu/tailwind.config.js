@@ -6,11 +6,18 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        'manu-green': '#10B981',
-        'manu-dark': '#1F2937',
-        'manu-light': '#F9FAFB',
+        'manu-green': '#32AC5D',
+        'manu-dark': '#000000ff',
+        'manu-light': '#ffffffff',
+        'manu-custom': '#a4a4a4ff',
+        'manu-iitm': '#D6A64F',
+        'manu-bits': '#ffffffff',
+        'manu-rkic': '#9C5843',
+
       }
     },
   },
   plugins: [],
 }
+
+

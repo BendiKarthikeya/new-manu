@@ -1,140 +1,315 @@
-import React from 'react';
-import { motion } from 'framer-motion';
+import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { ChevronLeft, ChevronRight, ExternalLink, Award, Users, Rocket, Star } from 'lucide-react';
 
 const BackedBySection = () => {
+    const [activeIndex, setActiveIndex] = useState(0);
+    const [isAutoPlaying, setIsAutoPlaying] = useState(true);
+    const [loadedImages, setLoadedImages] = useState({});
+
     const partners = [
-        {
-            name: 'IIT MADRAS',
-            logo: 'https://i.postimg.cc/CZmcV5vk/iitm.png',
-            description: 'NIRF 1 Ranked Institute'
-        },
         {
             name: 'BITS Pilani',
             logo: 'https://i.postimg.cc/bG3mjr6t/BITS-Pilani-Logo.png',
-            description: 'Premier Engineering Institute'
+            description: 'Premier Engineering Institute',
+            type: 'Deemed University',
+            achievements: ['NAAC A++', '4 Campuses', '50K+ Alumni', 'Top Recruiters'],
+            color: 'from-manu-bits to-manu-bits'
         },
         {
             name: 'IIT PATNA',
             logo: 'https://i.postimg.cc/qtj1dqmC/IIT-PATNA.jpg',
-            description: 'Top Indian Institute of Technology'
+            description: 'Top National Institute',
+            type: 'TOP IIT',
+            achievements: ['Established 2008', '120+ Faculty', 'Research Focus', 'Global Collaborations'],
+            color: 'from-manu-light to-manu-light'
         },
         {
             name: 'PIEDS',
             logo: 'https://i.postimg.cc/CB5mM0tz/pieds-logo.jpg',
-            description: 'Incubation Program'
+            description: 'Incubation Centre BITS Pilani',
+            type: 'Incubator',
+            achievements: ['Startup Support', 'Mentorship', 'Guidance', 'Networking'],
+            color: 'from-manu-light to-manu-light'
         },
         {
             name: 'RKIC',
-            logo: 'https://i.postimg.cc/N9FpGtVy/rkic.jpg',
-            description: 'Rakesh Kapoor Innovation Centre'
+            logo: 'https://i.postimg.cc/sghhx5tS/rkic.png',
+            description: 'Rakesh Kapoor Innovation Centre',
+            type: 'Innovation Hub',
+            achievements: ['Industry Connect', 'Prototyping', 'Networking', 'Workshops'],
+            color: 'from-manu-light to-manu-light'
         },
         {
             name: 'IOI',
             logo: 'https://i.postimg.cc/phrqVv7T/IOI-B.jpg',
-            description: 'Innovation Centre Bengaluru'
+            description: 'PW Innovation Centre Bengaluru',
+            type: 'Tech Hub',
+            achievements: ['Bengaluru Base', 'Tech Innovation', 'Startup Ecosystem'],
+            color: 'from-manu-light to-manu-light'
         }
     ];
 
-    // Fallback SVG as a data URL for missing images
-    const fallbackImageSrc = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHZpZXdCb3g9IjAgMCA2NCA2NCIgZmlsbD0ibm9uZSI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJncmFkIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwJSIgc3RvcC1jb2xvcj0iIzEwYjk4MSI+PC9zdG9wPjxzdG9wIG9mZnNldD0iMTAwJSIgc3RvcC1jb2xvcj0iIzA1OWY2OSI+PC9zdG9wPjwvbGluZWFyR3JhZGllbnQ+PC9kZWZzPjxyZWN0IHdpZHRoPSI2NCIgaGVpZ2h0PSI2NCIgZmlsbD0idXJsKCNncmFkKSIgcng9IjgiPjwvcmVjdD48L3N2Zz4=';
+    // Auto-rotate carousel
+    useEffect(() => {
+        if (!isAutoPlaying) return;
 
-    const handleImageError = (e) => {
-        e.target.src = fallbackImageSrc;
-        console.warn(`Failed to load logo: ${e.target.alt}`);
+        const interval = setInterval(() => {
+            setActiveIndex((current) => (current + 1) % partners.length);
+        }, 3000);
+
+        return () => clearInterval(interval);
+    }, [isAutoPlaying, partners.length]);
+
+    // Preload images
+    useEffect(() => {
+        partners.forEach((partner) => {
+            const img = new Image();
+            img.src = partner.logo;
+            img.onload = () => {
+                setLoadedImages(prev => ({ ...prev, [partner.logo]: true }));
+            };
+            img.onerror = () => {
+                setLoadedImages(prev => ({ ...prev, [partner.logo]: false }));
+            };
+        });
+    }, []);
+
+    const nextPartner = () => {
+        setActiveIndex((current) => (current + 1) % partners.length);
+        setIsAutoPlaying(false);
     };
 
-    const cardVariants = {
-        hidden: {
-            opacity: 0,
-            y: 30
-        },
-        visible: {
-            opacity: 1,
-            y: 0
+    const prevPartner = () => {
+        setActiveIndex((current) => (current - 1 + partners.length) % partners.length);
+        setIsAutoPlaying(false);
+    };
+
+    const goToPartner = (index) => {
+        setActiveIndex(index);
+        setIsAutoPlaying(false);
+    };
+
+    const handleImageError = (e, partnerLogo) => {
+        console.warn(`Failed to load logo: ${partnerLogo}`);
+        e.target.style.display = 'none';
+        const fallback = document.createElement('div');
+        fallback.className = 'w-full h-full flex items-center justify-center text-white font-bold text-xs';
+        fallback.textContent = e.target.alt?.split(' ')[0] || 'LOGO';
+        e.target.parentNode.appendChild(fallback);
+    };
+
+    const getLogoContent = (partner, className = "") => {
+        const isLoaded = loadedImages[partner.logo];
+
+        if (isLoaded === false || !partner.logo) {
+            return (
+                <div className={`w-full h-full flex items-center justify-center bg-gradient-to-br ${partner.color || 'from-gray-600 to-gray-700'} rounded-xl ${className}`}>
+                    <span className="text-white font-bold text-sm">{partner.name.split(' ')[0]}</span>
+                </div>
+            );
         }
+
+        return (
+            <img
+                src={partner.logo}
+                alt={partner.name}
+                className={`w-full h-full object-contain ${className}`}
+                onError={(e) => handleImageError(e, partner.logo)}
+                loading="lazy"
+            />
+        );
     };
 
     const containerVariants = {
-        hidden: {
-            opacity: 0,
-            y: 30
-        },
+        hidden: { opacity: 0 },
         visible: {
             opacity: 1,
-            y: 0
+            transition: {
+                staggerChildren: 0.1
+            }
         }
     };
 
+    const itemVariants = {
+        hidden: { opacity: 0, scale: 0.8 },
+        visible: {
+            opacity: 1,
+            scale: 1,
+            transition: {
+                duration: 0.5,
+                ease: "easeOut"
+            }
+        }
+    };
+
+    const activeCardVariants = {
+        initial: { scale: 0.9, opacity: 0 },
+        animate: { scale: 1, opacity: 1 },
+        exit: { scale: 0.9, opacity: 0 }
+    };
+
     return (
-        <section className="py-16 bg-manu-light" id="backed-by">
-            <div className="container mx-auto px-4">
+        <section className="relative py-12 md:py-20 overflow-hidden" id="backed-by">
+            {/* Background Image - Replace with your image source */}
+            <div
+                className="absolute inset-0 w-full h-full bg-cover bg-center bg-no-repeat opacity-100"
+                style={{
+                    backgroundImage: "url('/images/007.jpg')" // Replace with your image path
+                }}
+            />
+            {/* Dark overlay for better text readability - EXACTLY LIKE FOOTER */}
+            <div className="absolute inset-0 bg-black/85"></div>
+
+            <div className="relative container mx-auto px-4 sm:px-6 max-w-7xl">
+                {/* Header Section */}
                 <motion.div
-                    initial="hidden"
-                    whileInView="visible"
-                    variants={containerVariants}
-                    transition={{ duration: 0.6 }}
-                    viewport={{ once: true, margin: "-100px" }}
-                    className="text-center mb-12"
+                    initial={{ opacity: 0, y: 30 }}
+                    whileInView={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.8 }}
+                    viewport={{ once: true }}
+                    className="text-center mb-12 md:mb-16"
                 >
-                    <h2 className="text-3xl md:text-4xl font-bold text-manu-dark mb-4">
-                        Backed By
+
+
+                    <h2 className="text-3xl sm:text-4xl md:text-6xl font-extrabold text-manu-green mb-4 md:mb-6 px-2">
+                        Backed By <span className="text-transparent bg-clip-text bg-manu-green">Excellence</span>
                     </h2>
-                    <p className="text-gray-600 max-w-2xl mx-auto text-lg">
-                        Supported by leading institutions and innovation programs
+
+                    <p className="text-base sm:text-lg md:text-xl text-gray-200 max-w-3xl mx-auto leading-relaxed px-4">
+                        Supported by India's premier institutions and innovation ecosystems driving
+                        cutting-edge research and entrepreneurial growth
                     </p>
                 </motion.div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                    {partners.map((partner, index) => (
+                {/* Main Content - Mobile First Design */}
+                <div className="flex flex-col lg:flex-row items-center justify-between gap-8 md:gap-12">
+                    {/* Mobile Navigation - Only show on small screens */}
+                    <div className="lg:hidden w-full">
+                        <div className="flex justify-center space-x-4 mb-6">
+                            <motion.button
+                                onClick={prevPartner}
+                                className="p-3 rounded-xl bg-white/10 border border-white/20 hover:bg-white/20 transition-all duration-300 shadow-lg"
+                                whileHover={{ scale: 1.05 }}
+                                whileTap={{ scale: 0.95 }}
+                            >
+                                <ChevronLeft className="w-5 h-5 text-gray-300" />
+                            </motion.button>
+
+                            <div className="flex items-center space-x-2">
+                                {partners.map((_, index) => (
+                                    <button
+                                        key={index}
+                                        onClick={() => goToPartner(index)}
+                                        className={`w-2 h-2 rounded-full transition-all duration-300 ${index === activeIndex
+                                            ? 'bg-manu-green-400 w-6 shadow-lg'
+                                            : 'bg-gray-600 hover:bg-gray-400'
+                                            }`}
+                                    />
+                                ))}
+                            </div>
+
+                            <motion.button
+                                onClick={nextPartner}
+                                className="p-3 rounded-xl bg-white/10 border border-white/20 hover:bg-white/20 transition-all duration-300 shadow-lg"
+                                whileHover={{ scale: 1.05 }}
+                                whileTap={{ scale: 0.95 }}
+                            >
+                                <ChevronRight className="w-5 h-5 text-gray-300" />
+                            </motion.button>
+                        </div>
+                    </div>
+
+                    {/* Left - Carousel Navigation - Hidden on mobile */}
+                    <div className="hidden lg:block lg:w-2/5">
                         <motion.div
-                            key={`${partner.name}-${index}`}
+                            variants={containerVariants}
                             initial="hidden"
                             whileInView="visible"
-                            variants={cardVariants}
-                            transition={{
-                                duration: 0.6,
-                                delay: index * 0.1,
-                                ease: "easeOut"
-                            }}
-                            viewport={{ once: true, margin: "-50px" }}
-                            whileHover={{
-                                scale: 1.05,
-                                transition: { duration: 0.2 }
-                            }}
-                            whileTap={{ scale: 0.98 }}
-                            className="bg-white rounded-lg p-8 shadow-lg hover:shadow-xl transition-all duration-300 text-center group cursor-pointer"
+                            viewport={{ once: true }}
+                            className="grid grid-cols-2 md:grid-cols-3 gap-4"
                         >
-                            <div className="mb-6 flex justify-center items-center h-16">
-                                <img
-                                    src={partner.logo}
-                                    alt={`${partner.name} logo`}
-                                    className="h-16 w-auto max-w-full object-contain group-hover:scale-110 transition-transform duration-300"
-                                    onError={handleImageError}
-                                    loading="lazy"
-                                />
-                            </div>
-                            <h3 className="text-xl font-semibold text-manu-dark mb-2 group-hover:text-manu-green transition-colors duration-300">
-                                {partner.name}
-                            </h3>
-                            <p className="text-gray-600 text-sm leading-relaxed">
-                                {partner.description}
-                            </p>
+                            {partners.map((partner, index) => (
+                                <motion.button
+                                    key={partner.name}
+                                    variants={itemVariants}
+                                    onClick={() => goToPartner(index)}
+                                    className={`p-4 rounded-2xl  border-2 transition-all duration-300 group hover:shadow-xl ${activeIndex === index
+                                        ? 'bg-white/15 border-manu-green-400/50 shadow-lg shadow-manu-green-400/25'
+                                        : 'bg-white/5 border-white/20 hover:bg-white/10 hover:border-manu-green-400/30'
+                                        }`}
+                                    whileHover={{ scale: 1.05 }}
+                                    whileTap={{ scale: 0.95 }}
+                                >
+                                    <div className="flex flex-col items-center space-y-3">
+                                        <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${partner.color || 'from-gray-600 to-gray-700'} flex items-center justify-center p-2 group-hover:scale-110 transition-transform duration-300 shadow-lg`}>
+                                            {getLogoContent(partner, "w-full h-full object-contain")}
+                                        </div>
+                                        <span className={`text-sm font-semibold text-center ${activeIndex === index ? 'text-white' : 'text-gray-300'
+                                            } group-hover:text-white transition-colors`}>
+                                            {partner.name}
+                                        </span>
+                                    </div>
+                                </motion.button>
+                            ))}
                         </motion.div>
-                    ))}
-                </div>
+                    </div>
 
-                {/* Additional styling for better visual hierarchy */}
-                <motion.div
-                    initial={{ opacity: 0 }}
-                    whileInView={{ opacity: 1 }}
-                    transition={{ duration: 0.8, delay: 0.4 }}
-                    viewport={{ once: true }}
-                    className="mt-12 text-center"
-                >
-                    <p className="text-gray-500 text-sm">
-                        Trusted by leading academic institutions and innovation centers
-                    </p>
-                </motion.div>
+                    {/* Right - Active Partner Showcase */}
+                    <div className="w-full lg:w-3/5">
+                        <AnimatePresence mode="wait">
+                            <motion.div
+                                key={activeIndex}
+                                variants={activeCardVariants}
+                                initial="initial"
+                                animate="animate"
+                                exit="exit"
+                                transition={{ duration: 0.5 }}
+                                className="bg-white/5  rounded-2xl md:rounded-3xl p-6 md:p-8 shadow-2xl border border-white/20 mx-auto max-w-2xl hover:shadow-3xl transition-all duration-300"
+                            >
+                                <div className="flex flex-col md:flex-row items-center md:items-start gap-6 md:gap-8">
+                                    {/* Logo and Basic Info */}
+                                    <div className="flex-shrink-0 text-center md:text-left">
+                                        <div className={`w-24 h-24 md:w-32 md:h-32 rounded-2xl bg-gradient-to-br ${partners[activeIndex].color || 'from-gray-600 to-gray-700'} flex items-center justify-center p-3 md:p-4 shadow-xl mx-auto md:mx-0 mb-4 border border-white/20`}>
+                                            {getLogoContent(partners[activeIndex], "w-full h-full object-contain")}
+                                        </div>
+
+                                        <div className="inline-flex items-center space-x-2 bg-white/10 rounded-full px-3 py-1 md:px-4 md:py-2 border border-white/20">
+                                            <Star className="w-3 h-3 md:w-4 md:h-4 text-yellow-400" />
+                                            <span className="text-xs md:text-sm font-semibold text-yellow-400">{partners[activeIndex].type}</span>
+                                        </div>
+                                    </div>
+
+                                    {/* Detailed Information */}
+                                    <div className="flex-1 text-center md:text-left">
+                                        <h3 className="text-2xl md:text-3xl font-bold text-white mb-3">
+                                            {partners[activeIndex].name}
+                                        </h3>
+
+                                        <p className="text-base md:text-lg text-gray-200 mb-4 md:mb-6 leading-relaxed">
+                                            {partners[activeIndex].description}
+                                        </p>
+
+                                        {/* Achievements */}
+                                        <div className="space-y-3 mb-6">
+
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                                {partners[activeIndex].achievements.map((achievement, idx) => (
+                                                    <div key={idx} className="flex items-center space-x-2 text-xs md:text-sm text-gray-200">
+                                                        <div className="w-1.5 h-1.5 bg-manu-green-400 rounded-full flex-shrink-0 shadow-sm"></div>
+                                                        <span className="break-words">{achievement}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+
+
+                                    </div>
+                                </div>
+                            </motion.div>
+                        </AnimatePresence>
+                    </div>
+                </div>
             </div>
         </section>
     );

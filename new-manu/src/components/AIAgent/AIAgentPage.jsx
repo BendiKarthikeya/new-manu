@@ -1,18 +1,17 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { MessageCircle, FileText } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { MessageCircle, FileText, Edit3, Send, Download, Mail, Upload, SkipForward } from 'lucide-react';
 import { createClient } from '@supabase/supabase-js';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
-
+import { generateDocuments, renderTemplateComponent } from '../LandingPage/TemplateEngine';
+import * as ReactDOM from 'react-dom/client';
 import Header from '../LandingPage/Header';
-import { generateDocuments } from '../LandingPage/TemplateEngine';
-import { ITEM_DATABASE } from './itemDatabase';
 
 // Initialize Supabase client
-const supabase = createClient(
-    import.meta.env.VITE_SUPABASE_URL || import.meta.env.REACT_APP_SUPABASE_URL,
-    import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.REACT_APP_SUPABASE_ANON_KEY
-);
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || import.meta.env.REACT_APP_SUPABASE_URL;
+const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.REACT_APP_SUPABASE_ANON_KEY;
+
+const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
 
 const AIAgentPage = ({ user, onPageChange, onLogout, documentsUploaded = true }) => {
     // State management
@@ -26,44 +25,567 @@ const AIAgentPage = ({ user, onPageChange, onLogout, documentsUploaded = true })
     const [awaitingInput, setAwaitingInput] = useState(false);
     const [generatedDocuments, setGeneratedDocuments] = useState([]);
     const [activeDocIndex, setActiveDocIndex] = useState(0);
-    const [manualFillRequired, setManualFillRequired] = useState(false);
+    const [showContinueButton, setShowContinueButton] = useState(false);
 
-    // Product entry states
-    const [productEntryStep, setProductEntryStep] = useState(0);
-    const [currentProduct, setCurrentProduct] = useState({
-        item: '',
-        description: '',
-        hsCode: '',
-        quantity: '',
-        unitPrice: ''
-    });
-    const [showSuggestions, setShowSuggestions] = useState(false);
-    const [filteredItems, setFilteredItems] = useState([]);
-    const [products, setProducts] = useState([]);
     const [isSendingEmail, setIsSendingEmail] = useState(false);
+    const [userMessage, setUserMessage] = useState('');
+    const [logoFile, setLogoFile] = useState(null);
+    const [logoPreview, setLogoPreview] = useState(null);
+    const [signatureFile, setSignatureFile] = useState(null);
+    const [signaturePreview, setSignaturePreview] = useState(null);
+
+    // New edit functionality state
+    const [isEditing, setIsEditing] = useState(false);
+    const [editData, setEditData] = useState({});
+    const [activeEditTab, setActiveEditTab] = useState('exporter');
+
+    // Autofill states
+    const [pendingInput, setPendingInput] = useState('');
+    const [showConfirmButton, setShowConfirmButton] = useState(false);
+    const [currentInputField, setCurrentInputField] = useState('');
+
+    // Product state
+    const [products, setProducts] = useState([]);
+    const [currentProduct, setCurrentProduct] = useState({
+        product_code: '',
+        description: '',
+        hs_code: '',
+        unit: 'PCS',
+        quantity: '',
+        unit_price: '',
+        total_amount: ''
+    });
+
+    // Packing state
+    const [packingInfo, setPackingInfo] = useState([]);
+    const [currentPacking, setCurrentPacking] = useState({
+        product_index: '',
+        kind_of_packages: 'Carton',
+        number_of_packages: '',
+        net_weight: '',
+        gross_weight: '',
+        length: '',
+        width: '',
+        height: ''
+    });
+
+    // Refs for auto-scroll
+    const messagesEndRef = useRef(null);
+    const inputRef = useRef(null);
 
     // Storage key for persistence
     const storageKey = useMemo(() => `manudocs.aiagent.chat.${user?.id || 'guest'}`, [user?.id]);
+    const autofillStorageKey = useMemo(() => `manudocs.autofill.data.${user?.id || 'guest'}`, [user?.id]);
 
-    // Unique ID generator to avoid duplicate keys
+    // Unique ID generator
     const generateUniqueId = useCallback(() => {
         return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     }, []);
 
-    // Questions configuration
-    const questions = useMemo(() => [
-        { field: 'buyer_company', question: 'What is the buyer\'s company name?', type: 'text' },
-        { field: 'buyer_address', question: 'What is the buyer\'s complete address with country?', type: 'textarea' },
-        { field: 'products', question: 'Please add your products one by one.', type: 'products' },
-        { field: 'currency', question: 'What currency would you like to use?', type: 'select', options: ['USD', 'EUR', 'INR', 'GBP'] },
-        { field: 'port_loading', question: 'Which is the Port of Loading?', type: 'text' },
-        { field: 'port_discharge', question: 'Which is the Port of Discharge?', type: 'text' },
-        { field: 'transport_mode', question: 'What is the mode of transport?', type: 'select', options: ['Sea', 'Air', 'Road'] },
-        { field: 'credit_note_amount', question: 'What is the amount for the Credit Note?', type: 'text' },
-        { field: 'debit_note_amount', question: 'What is the amount for the Debit Note?', type: 'text' },
-    ], []);
+    // Document-specific questions
+    const documentQuestions = useMemo(() => ({
+        // Common questions for most documents
+        common: [
+            // ========== EXPORTER DETAILS ==========
+            { field: 'exporter_company_name', question: 'What is your company name?', type: 'text', required: true, category: 'exporter' },
+            { field: 'exporter_address', question: 'What is your complete company address?', type: 'textarea', required: true, category: 'exporter' },
+            { field: 'exporter_gstin', question: 'What is your GST number? (Format: 07AABCU9603R1ZM)', type: 'text', required: true, category: 'exporter' },
+            { field: 'exporter_contact_person', question: 'What is your contact person\'s name?', type: 'text', required: true, category: 'exporter' },
+            { field: 'exporter_contact_info', question: 'What is your contact phone number or email?', type: 'text', required: true, category: 'exporter' },
+            { field: 'exporter_logo', question: 'Would you like to upload your company logo? (PNG/JPG, max 2MB)', type: 'file', accept: 'image/*', required: false, category: 'exporter' },
+            { field: 'exporter_eori_number', question: 'What is your EORI number? (Economic Operator Registration and Identification)', type: 'text', required: false, category: 'exporter' },
+            { field: 'authorized_signatory_name', question: 'What is the name of the authorized signatory?', type: 'text', required: true, category: 'signatory' },
+            { field: 'authorized_signatory_designation', question: 'What is the designation of the authorized signatory?', type: 'text', required: true, category: 'signatory' },
+            { field: 'authorized_signature', question: 'Please upload the authorized signature (PNG/JPG, max 2MB)', type: 'file', accept: 'image/*', required: true, category: 'signatory' },
 
-    // Load saved chat state on mount or when user changes
+            // ========== BUYER DETAILS ==========
+            { field: 'buyer_company_name', question: 'What is the buyer\'s complete legal company name?', type: 'text', required: true, category: 'buyer' },
+            { field: 'buyer_address', question: 'What is the buyer\'s complete address?', type: 'textarea', required: true, category: 'buyer' },
+            { field: 'buyer_country', question: 'What is the buyer\'s country?', type: 'text', required: true, category: 'buyer' },
+            { field: 'buyer_reference', question: 'What is the buyer\'s reference number?', type: 'text', required: false, category: 'buyer' },
+
+            // ========== CONSIGNEE DETAILS ==========
+            { field: 'consignee_same_as_buyer', question: 'Is the consignee the same as the buyer?', type: 'select', options: ['Yes', 'No'], required: true, category: 'consignee' },
+            { field: 'consignee_company_name', question: 'What is the consignee\'s company name?', type: 'text', required: false, condition: { field: 'consignee_same_as_buyer', value: 'No' }, category: 'consignee' },
+            { field: 'consignee_address', question: 'What is the consignee\'s complete address?', type: 'textarea', required: false, condition: { field: 'consignee_same_as_buyer', value: 'No' }, category: 'consignee' },
+            { field: 'consignee_country', question: 'What is the consignee\'s country?', type: 'text', required: false, condition: { field: 'consignee_same_as_buyer', value: 'No' }, category: 'consignee' },
+
+            // ========== SHIPMENT DETAILS ==========
+            { field: 'dispatch_method', question: 'What is the method of dispatch?', type: 'select', options: ['Sea', 'Air', 'Road', 'Rail'], required: true, category: 'shipment' },
+            { field: 'shipment_type', question: 'What is the type of shipment?', type: 'select', options: ['Full Container', 'Less than Container (LCL)', 'Bulk', 'Break Bulk', 'Air Freight'], required: true, category: 'shipment' },
+            { field: 'country_of_origin', question: 'What is the country of origin of goods?', type: 'text', required: true, category: 'shipment' },
+            { field: 'final_destination_country', question: 'What is the country of final destination?', type: 'text', required: true, category: 'shipment' },
+            { field: 'port_of_loading', question: 'What is the port of loading? (e.g., NHAVA SHEVA, MUMBAI)', type: 'text', required: true, category: 'shipment' },
+            { field: 'port_of_discharge', question: 'What is the port of discharge? (e.g., ROTTERDAM)', type: 'text', required: true, category: 'shipment' },
+            { field: 'departure_date', question: 'What is the date of departure?', type: 'date', required: true, category: 'shipment' },
+            { field: 'delivery_date', question: 'What is the expected delivery date?', type: 'date', required: true, category: 'shipment' },
+            { field: 'vessel_flight_details', question: 'What is the vessel name / aircraft name and voyage number? (e.g., MAERSK HONG KONG / V.234W)', type: 'text', required: true, category: 'shipment' },
+            { field: 'place_of_receipt', question: 'Where will the carrier receive the goods?', type: 'text', required: true, category: 'shipment' },
+            { field: 'place_of_delivery', question: 'What is the final place of delivery?', type: 'text', required: true, category: 'shipment' },
+
+            // ========== PAYMENT & TERMS ==========
+            { field: 'incoterms', question: 'What are the terms of sale? (Incoterms 2020)', type: 'select', options: ['EXW', 'FCA', 'FOB', 'CIF', 'CFR', 'DAP', 'DDP'], required: true, category: 'payment' },
+            { field: 'payment_method', question: 'What is the method of payment?', type: 'select', options: ['Letter of Credit', 'Bank Transfer', 'Cash', 'Documentary Collection', 'Open Account'], required: true, category: 'payment' },
+            { field: 'currency', question: 'What is the transaction currency?', type: 'select', options: ['USD', 'EUR', 'INR', 'GBP', 'JPY', 'AED', 'SGD'], required: true, category: 'payment' },
+            { field: 'bank_details', question: 'What are your bank details for payment? Include account number, bank name, SWIFT/IFSC, and branch.', type: 'textarea', required: true, category: 'payment' },
+        ],
+
+        // Invoice-specific questions
+        commercial_invoice: [
+            { field: 'invoice_number', question: 'What is the invoice number? (e.g., INV-2024-001)', type: 'text', required: true, category: 'documents' },
+            { field: 'invoice_date', question: 'What is the invoice issue date?', type: 'date', required: true, category: 'documents' },
+            { field: 'export_reference', question: 'What is the export reference number?', type: 'text', required: false, category: 'documents' },
+            { field: 'bill_of_lading', question: 'What is the bill of lading number? (if applicable)', type: 'text', required: false, category: 'documents' },
+            { field: 'declaration_number', question: 'What is the customs declaration number?', type: 'text', required: false, category: 'documents' },
+            { field: 'insurance_policy', question: 'What is the Marine Cover Policy No?', type: 'text', required: false, category: 'payment' },
+            { field: 'lc_number', question: 'What is the Letter Of Credit (LC) No?', type: 'text', required: false, category: 'payment' },
+            { field: 'additional_instructions', question: 'Are there any additional instructions or remarks for this shipment?', type: 'textarea', required: false, category: 'additional' },
+            { field: 'products', question: 'Let\'s add your products for the invoice.', type: 'products', required: true, category: 'products' },
+        ],
+
+        proforma_invoice: [
+            { field: 'invoice_number', question: 'What is the proforma invoice number? (e.g., PI-2024-001)', type: 'text', required: true, category: 'documents' },
+            { field: 'invoice_date', question: 'What is the proforma invoice issue date?', type: 'date', required: true, category: 'documents' },
+            { field: 'additional_instructions', question: 'Any additional remarks for the proforma invoice?', type: 'textarea', required: false, category: 'additional' },
+            { field: 'products', question: 'Let\'s add your products for the proforma invoice.', type: 'products', required: true, category: 'products' },
+        ],
+
+        packing_list: [
+            { field: 'invoice_number', question: 'What is the export invoice number?', type: 'text', required: true, category: 'documents' },
+            { field: 'invoice_date', question: 'What is the export invoice date?', type: 'date', required: true, category: 'documents' },
+            { field: 'export_reference', question: 'What is the export reference number?', type: 'text', required: false, category: 'documents' },
+            { field: 'bill_of_lading', question: 'What is the bill of lading number?', type: 'text', required: false, category: 'documents' },
+            { field: 'additional_instructions', question: 'Any special packing instructions?', type: 'textarea', required: false, category: 'additional' },
+            { field: 'packing_info', question: 'Let\'s add packing information for your products.', type: 'packing', required: true, category: 'packing' },
+        ],
+
+        quotation: [
+            { field: 'quotation_validity', question: 'How many days is this quotation valid?', type: 'number', required: true, category: 'quotation' },
+            { field: 'payment_terms_detailed', question: 'Detailed payment terms for quotation?', type: 'textarea', required: true, category: 'quotation' },
+            { field: 'delivery_terms', question: 'Detailed delivery timeline?', type: 'textarea', required: true, category: 'quotation' },
+            { field: 'inclusions_exclusions', question: 'What is included/excluded in the quotation?', type: 'textarea', required: true, category: 'quotation' },
+            { field: 'additional_instructions', question: 'Any additional terms and conditions?', type: 'textarea', required: false, category: 'additional' },
+            { field: 'products', question: 'Let\'s add products for the quotation.', type: 'products', required: true, category: 'products' },
+        ]
+    }), []);
+
+    // Get questions based on selected templates
+    const getQuestionsForSelectedTemplates = useCallback(() => {
+        if (selectedTemplates.length === 0) return [];
+
+        let allQuestions = [...documentQuestions.common];
+        const seenFields = new Set(allQuestions.map(q => q.field));
+
+        selectedTemplates.forEach(template => {
+            const templateQuestions = documentQuestions[template.id] || [];
+            templateQuestions.forEach(question => {
+                if (!seenFields.has(question.field)) {
+                    allQuestions.push(question);
+                    seenFields.add(question.field);
+                }
+            });
+        });
+
+        return allQuestions;
+    }, [selectedTemplates, documentQuestions]);
+
+    const questions = useMemo(() => getQuestionsForSelectedTemplates(), [getQuestionsForSelectedTemplates]);
+
+    // Group questions by category for editing
+    const questionsByCategory = useMemo(() => {
+        const categories = {};
+        questions.forEach(q => {
+            if (!categories[q.category]) {
+                categories[q.category] = [];
+            }
+            categories[q.category].push(q);
+        });
+        return categories;
+    }, [questions]);
+
+    // Get current document data (with edits if in edit mode)
+    const getCurrentDocumentData = useCallback(() => {
+        if (isEditing && Object.keys(editData).length > 0) {
+            return {
+                ...editData,
+                total_amount: editData.products?.reduce((sum, product) =>
+                    sum + (parseFloat(product.total_amount) || 0), 0) || 0,
+            };
+        }
+
+        return {
+            ...userInputs,
+            products: products,
+            packing_info: packingInfo,
+            exporter_logo: logoPreview,
+            authorized_signature: signaturePreview,
+            total_amount: products.reduce((sum, product) => sum + (parseFloat(product.total_amount) || 0), 0),
+        };
+    }, [isEditing, editData, userInputs, products, packingInfo, logoPreview, signaturePreview]);
+
+    // Load autofill data from localStorage
+    const loadAutofillData = useCallback(() => {
+        try {
+            const saved = localStorage.getItem(autofillStorageKey);
+            return saved ? JSON.parse(saved) : {};
+        } catch (error) {
+            console.warn('Error loading autofill data:', error);
+            return {};
+        }
+    }, [autofillStorageKey]);
+
+    // Save autofill data to localStorage
+    const saveAutofillData = useCallback((data) => {
+        try {
+            localStorage.setItem(autofillStorageKey, JSON.stringify(data));
+        } catch (error) {
+            console.warn('Error saving autofill data:', error);
+        }
+    }, [autofillStorageKey]);
+
+    // Update autofill data when user inputs change for first 3 questions
+    useEffect(() => {
+        const autofillFields = ['exporter_company_name', 'exporter_address', 'exporter_gstin'];
+        const hasNewData = autofillFields.some(field =>
+            userInputs[field] && userInputs[field] !== '[Skipped]' && userInputs[field].trim()
+        );
+
+        if (hasNewData) {
+            const newAutofillData = { ...loadAutofillData() };
+            autofillFields.forEach(field => {
+                if (userInputs[field] && userInputs[field] !== '[Skipped]') {
+                    newAutofillData[field] = userInputs[field];
+                }
+            });
+            saveAutofillData(newAutofillData);
+        }
+    }, [userInputs, loadAutofillData, saveAutofillData]);
+
+    // Handle file uploads
+    const handleFileUpload = useCallback((file, field) => {
+        return new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const result = e.target.result;
+                if (field === 'exporter_logo') {
+                    setLogoPreview(result);
+                } else if (field === 'authorized_signature') {
+                    setSignaturePreview(result);
+                }
+                resolve(result);
+            };
+            reader.readAsDataURL(file);
+        });
+    }, []);
+
+    // Handle user input
+    const handleUserInput = useCallback(async (inputValue, field, file = null) => {
+        console.log('handleUserInput called - field:', field, 'value:', inputValue);
+
+        // Handle file uploads
+        if (file) {
+            await handleFileUpload(file, field);
+            inputValue = file.name;
+        }
+
+        // Validate required fields
+        const currentQ = questions.find(q => q.field === field);
+        if (currentQ?.required && !inputValue) {
+            alert('This field is required. Please provide an answer.');
+            return;
+        }
+
+        setUserInputs(prev => ({
+            ...prev,
+            [field]: inputValue
+        }));
+
+        // Save to autofill data for first 3 questions
+        const autofillFields = ['exporter_company_name', 'exporter_address', 'exporter_gstin'];
+        if (autofillFields.includes(field) && inputValue && inputValue !== '[Skipped]') {
+            const autofillData = loadAutofillData();
+            autofillData[field] = inputValue;
+            saveAutofillData(autofillData);
+        }
+
+        if (field !== 'exporter_logo' && field !== 'authorized_signature') {
+            setMessages(prev => [...prev, {
+                id: generateUniqueId(),
+                type: 'user',
+                content: inputValue,
+                timestamp: new Date()
+            }]);
+        }
+
+        setMessages(prevMessages =>
+            prevMessages.map(msg =>
+                msg.showInput && msg.expectedField === field
+                    ? { ...msg, showInput: false, inputDisabled: true, userAnswer: inputValue }
+                    : msg
+            )
+        );
+
+        setAwaitingInput(false);
+        setShowConfirmButton(false);
+        setPendingInput('');
+        setCurrentInputField('');
+
+        // Move to next question and trigger next question
+        const nextIndex = currentQuestion + 1;
+        console.log('Moving to next question index:', nextIndex);
+        setCurrentQuestion(nextIndex);
+    }, [generateUniqueId, questions, currentQuestion, handleFileUpload, loadAutofillData, saveAutofillData]);
+
+    // Handle confirm button click for autofilled inputs
+    const handleConfirmInput = useCallback(() => {
+        if (pendingInput.trim()) {
+            handleUserInput(pendingInput, currentInputField);
+        }
+    }, [pendingInput, currentInputField, handleUserInput]);
+
+    // Complete data collection
+    const completeDataCollection = useCallback(async () => {
+        console.log('=== completeDataCollection called ===');
+
+        const selectedDocNames = selectedTemplates.map(t => t.name).join(', ');
+
+        setMessages(prev => [...prev, {
+            id: generateUniqueId(),
+            type: 'bot',
+            content: `🎉 All information collected!\n\nGenerating your professional export documents now...\n\n📄 Documents to be generated:\n${selectedTemplates.map(t => `• ${t.name}`).join('\n')}`,
+            timestamp: new Date()
+        }]);
+
+        setCurrentStep('generating');
+
+        // Prepare final data for document generation
+        const finalData = getCurrentDocumentData();
+
+        console.log('Final data for document generation:', finalData);
+
+        // Use the actual template engine to generate documents
+        const companyData = {
+            company_name: userInputs.exporter_company_name,
+            comp_reg_address: userInputs.exporter_address,
+            gstin: userInputs.exporter_gstin
+        };
+
+        try {
+            const generatedDocs = generateDocuments(selectedTemplates, companyData, finalData);
+            console.log('Generated documents:', generatedDocs);
+
+            setGeneratedDocuments(generatedDocs);
+
+            setMessages(prev => [...prev, {
+                id: generateUniqueId(),
+                type: 'bot',
+                content: `✅ ${selectedTemplates.length} professional export documents generated successfully!\n\n📋 Documents include:\n${selectedTemplates.map(t => `• ${t.name}`).join('\n')}`,
+                timestamp: new Date(),
+                showDownloadButton: true
+            }]);
+
+            console.log('Setting currentStep to completed');
+            setCurrentStep('completed');
+        } catch (error) {
+            console.error('Error generating documents:', error);
+            setMessages(prev => [...prev, {
+                id: generateUniqueId(),
+                type: 'bot',
+                content: '❌ Error generating documents. Please try again.',
+                timestamp: new Date()
+            }]);
+            setCurrentStep('error');
+        }
+    }, [generateUniqueId, getCurrentDocumentData, userInputs, selectedTemplates]);
+
+    // Get the next valid question index
+    const getNextValidQuestionIndex = useCallback((startIndex) => {
+        let index = startIndex;
+
+        while (index < questions.length) {
+            const question = questions[index];
+
+            // Skip conditional questions that don't apply
+            if (question.condition) {
+                const conditionField = question.condition.field;
+                const conditionValue = question.condition.value;
+
+                if (userInputs[conditionField] !== conditionValue) {
+                    console.log(`Skipping conditional question: ${question.field}, condition not met`);
+                    index++;
+                    continue;
+                }
+            }
+
+            // This question is valid
+            return index;
+        }
+
+        // No more valid questions
+        return questions.length;
+    }, [questions, userInputs]);
+
+    // Skip current question
+    const skipCurrentQuestion = useCallback(() => {
+        const currentQ = questions[currentQuestion];
+
+        if (currentQ.required) {
+            alert('This question is required and cannot be skipped.');
+            return;
+        }
+
+        setMessages(prev => [...prev, {
+            id: generateUniqueId(),
+            type: 'user',
+            content: '[Skipped]',
+            timestamp: new Date()
+        }]);
+
+        setMessages(prevMessages =>
+            prevMessages.map(msg =>
+                msg.showInput && msg.expectedField === currentQ.field
+                    ? { ...msg, showInput: false, inputDisabled: true, userAnswer: '[Skipped]' }
+                    : msg
+            )
+        );
+
+        setUserInputs(prev => ({
+            ...prev,
+            [currentQ.field]: '[Skipped]'
+        }));
+
+        setAwaitingInput(false);
+        setShowConfirmButton(false);
+        const nextIndex = currentQuestion + 1;
+        setCurrentQuestion(nextIndex);
+    }, [currentQuestion, questions, generateUniqueId]);
+
+    // Ask questions one by one
+    const askNextQuestion = useCallback(() => {
+        console.log('=== askNextQuestion called ===');
+        console.log('currentQuestion:', currentQuestion);
+        console.log('questions.length:', questions.length);
+        console.log('awaitingInput:', awaitingInput);
+        console.log('currentStep:', currentStep);
+
+        // If we're already awaiting input, don't ask another question
+        if (awaitingInput) {
+            console.log('Already awaiting input, skipping...');
+            return;
+        }
+
+        // Find the next valid question
+        const nextValidIndex = getNextValidQuestionIndex(currentQuestion);
+        console.log('nextValidIndex:', nextValidIndex);
+
+        if (nextValidIndex >= questions.length) {
+            console.log('All questions completed, calling completeDataCollection');
+            completeDataCollection();
+            return;
+        }
+
+        setCurrentQuestion(nextValidIndex);
+        const currentQ = questions[nextValidIndex];
+
+        console.log('Asking question:', currentQ.field, 'index:', nextValidIndex);
+
+        // Check for autofill values from localStorage for first 3 questions
+        let autofillValue = '';
+        const autofillFields = ['exporter_company_name', 'exporter_address', 'exporter_gstin'];
+
+        if (autofillFields.includes(currentQ.field)) {
+            const autofillData = loadAutofillData();
+            autofillValue = autofillData[currentQ.field] || '';
+        }
+
+        // Also check company data as fallback
+        if (!autofillValue && nextValidIndex < 3 && companyData) {
+            switch (currentQ.field) {
+                case 'exporter_company_name':
+                    autofillValue = companyData.company_name;
+                    break;
+                case 'exporter_address':
+                    autofillValue = companyData.comp_reg_address;
+                    break;
+                case 'exporter_gstin':
+                    autofillValue = companyData.gstin;
+                    break;
+            }
+        }
+
+        // If we have an autofill value and the field isn't already filled, show with autofill
+        if (autofillValue && !userInputs[currentQ.field]) {
+            console.log('Showing question with autofill value:', autofillValue);
+
+            setMessages(prev => [...prev, {
+                id: generateUniqueId(),
+                type: 'bot',
+                content: `${nextValidIndex + 1}/${questions.length} - ${currentQ.question}${currentQ.required ? ' *' : ''}\n\nI found this information from your previous sessions: "${autofillValue}"`,
+                timestamp: new Date(),
+                showInput: true,
+                inputType: currentQ.type,
+                inputOptions: currentQ.options,
+                expectedField: currentQ.field,
+                required: currentQ.required,
+                accept: currentQ.accept,
+                showSkip: !currentQ.required,
+                autofillValue: autofillValue
+            }]);
+
+            // Set the pending input with autofill value
+            setPendingInput(autofillValue);
+            setCurrentInputField(currentQ.field);
+            setShowConfirmButton(true);
+            setAwaitingInput(true);
+            return;
+        }
+
+        if (currentQ.field === 'products') {
+            setMessages(prev => [...prev, {
+                id: generateUniqueId(),
+                type: 'bot',
+                content: `Let's add your products. We'll collect the following details for each product:\n• Product Code\n• Description\n• HS Code (for Commercial Invoice)\n• Unit of Measure\n• Quantity\n• Unit Price\n• Total Amount\n\nClick "Add Product" to start.`,
+                timestamp: new Date(),
+                showInput: true,
+                inputType: 'products',
+                expectedField: 'products'
+            }]);
+            setAwaitingInput(true);
+            return;
+        }
+
+        if (currentQ.field === 'packing_info') {
+            setMessages(prev => [...prev, {
+                id: generateUniqueId(),
+                type: 'bot',
+                content: `Now let's add packing information for your products. We need:\n• Product reference\n• Kind of packages\n• Number of packages\n• Net weight (Kg)\n• Gross weight (Kg)\n• Measurements (Length × Width × Height)\n\nClick "Add Packing Info" to start.`,
+                timestamp: new Date(),
+                showInput: true,
+                inputType: 'packing',
+                expectedField: 'packing_info'
+            }]);
+            setAwaitingInput(true);
+            return;
+        }
+
+        setMessages(prev => [...prev, {
+            id: generateUniqueId(),
+            type: 'bot',
+            content: `${nextValidIndex + 1}/${questions.length} - ${currentQ.question}${currentQ.required ? ' *' : ''}`,
+            timestamp: new Date(),
+            showInput: true,
+            inputType: currentQ.type,
+            inputOptions: currentQ.options,
+            expectedField: currentQ.field,
+            required: currentQ.required,
+            accept: currentQ.accept,
+            showSkip: !currentQ.required,
+            autofillValue: autofillValue
+        }]);
+        setAwaitingInput(true);
+    }, [currentQuestion, questions, completeDataCollection, userInputs, generateUniqueId, awaitingInput, currentStep, getNextValidQuestionIndex, companyData, loadAutofillData]);
+
+    // Load saved state and company data
     useEffect(() => {
         const loadSavedState = () => {
             try {
@@ -81,20 +603,20 @@ const AIAgentPage = ({ user, onPageChange, onLogout, documentsUploaded = true })
                         setAwaitingInput(Boolean(saved.awaitingInput));
                         setGeneratedDocuments(saved.generatedDocuments || []);
                         setActiveDocIndex(saved.activeDocIndex || 0);
-                        setManualFillRequired(Boolean(saved.manualFillRequired));
-                        setProductEntryStep(saved.productEntryStep || 0);
-                        setCurrentProduct(saved.currentProduct || {
-                            item: '',
-                            description: '',
-                            hsCode: '',
-                            quantity: '',
-                            unitPrice: ''
-                        });
-                        setShowSuggestions(Boolean(saved.showSuggestions));
-                        setFilteredItems(saved.filteredItems || []);
+                        setShowContinueButton(Boolean(saved.showContinueButton));
                         setProducts(saved.products || []);
-                        setIsSendingEmail(Boolean(saved.isSendingEmail));
+                        setPackingInfo(saved.packingInfo || []);
+                        setLogoPreview(saved.logoPreview || null);
+                        setSignaturePreview(saved.signaturePreview || null);
                     }
+                }
+
+                // Load company data from previous sessions
+                const companyDataKey = `manudocs.companyData.${user?.id || 'guest'}`;
+                const savedCompanyData = localStorage.getItem(companyDataKey);
+                if (savedCompanyData) {
+                    const companyData = JSON.parse(savedCompanyData);
+                    setCompanyData(companyData);
                 }
             } catch (error) {
                 console.warn('Error loading saved chat state:', error);
@@ -102,9 +624,21 @@ const AIAgentPage = ({ user, onPageChange, onLogout, documentsUploaded = true })
         };
 
         loadSavedState();
-    }, [storageKey]);
+    }, [storageKey, user?.id]);
 
-    // Save chat state whenever significant pieces change
+    // Auto-scroll to bottom
+    useEffect(() => {
+        if (messagesEndRef.current) {
+            setTimeout(() => {
+                messagesEndRef.current.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'end'
+                });
+            }, 300);
+        }
+    }, [messages]);
+
+    // Save state
     useEffect(() => {
         const saveState = () => {
             try {
@@ -119,16 +653,25 @@ const AIAgentPage = ({ user, onPageChange, onLogout, documentsUploaded = true })
                     awaitingInput,
                     generatedDocuments,
                     activeDocIndex,
-                    manualFillRequired,
-                    productEntryStep,
-                    currentProduct,
-                    showSuggestions,
-                    filteredItems,
+                    showContinueButton,
                     products,
-                    isSendingEmail
+                    packingInfo,
+                    logoPreview,
+                    signaturePreview,
                 };
                 if (typeof window !== 'undefined') {
                     localStorage.setItem(storageKey, JSON.stringify(stateToSave));
+                }
+
+                // Save company data separately for future sessions
+                if (userInputs.exporter_company_name) {
+                    const companyDataToSave = {
+                        company_name: userInputs.exporter_company_name,
+                        comp_reg_address: userInputs.exporter_address,
+                        gstin: userInputs.exporter_gstin
+                    };
+                    const companyDataKey = `manudocs.companyData.${user?.id || 'guest'}`;
+                    localStorage.setItem(companyDataKey, JSON.stringify(companyDataToSave));
                 }
             } catch (error) {
                 console.warn('Error saving chat state:', error);
@@ -137,121 +680,32 @@ const AIAgentPage = ({ user, onPageChange, onLogout, documentsUploaded = true })
 
         saveState();
     }, [
-        messages,
-        currentStep,
-        initialized,
-        selectedTemplates,
-        companyData,
-        userInputs,
-        currentQuestion,
-        awaitingInput,
-        generatedDocuments,
-        activeDocIndex,
-        manualFillRequired,
-        productEntryStep,
-        currentProduct,
-        showSuggestions,
-        filteredItems,
-        products,
-        isSendingEmail,
-        storageKey
+        messages, currentStep, initialized, selectedTemplates, companyData,
+        userInputs, currentQuestion, awaitingInput, generatedDocuments,
+        activeDocIndex, showContinueButton, products, packingInfo,
+        logoPreview, signaturePreview, storageKey, user?.id
     ]);
 
-    // Complete data collection - FIXED VERSION
-    const completeDataCollection = useCallback(async () => {
-        setMessages(prev => [...prev, {
-            id: generateUniqueId(),
-            type: 'bot',
-            content: '🎉 All information collected!\n\nGenerating your documents now...\n\n📄 Templates will be populated with:\n✅ Company data (auto-filled)\n✅ Your provided information\n✅ Professional formatting',
-            timestamp: new Date()
-        }]);
-
-        setCurrentStep('generating');
-
-        // Generate templates using the engine - FIXED
-        try {
-            const generatedDocs = generateDocuments(selectedTemplates, companyData, userInputs);
-            setGeneratedDocuments(generatedDocs);
-
-            setTimeout(() => {
-                setMessages(prev => [...prev, {
-                    id: generateUniqueId(),
-                    type: 'bot',
-                    content: '✅ Documents generated successfully!\n\nYou can preview and download them from the right panel.',
-                    timestamp: new Date(),
-                    showDownloadButton: true
-                }]);
-                setCurrentStep('completed');
-            }, 3000);
-        } catch (error) {
-            console.error('Template generation error:', error);
-            setMessages(prev => [...prev, {
-                id: generateUniqueId(),
-                type: 'bot',
-                content: '❌ Error generating documents. Please try again.',
-                timestamp: new Date()
-            }]);
-        }
-    }, [selectedTemplates, companyData, userInputs, generateUniqueId]);
-
-    // Ask questions one by one
-    const askNextQuestion = useCallback(() => {
-        if (currentQuestion < questions.length) {
-            const question = questions[currentQuestion];
-
-            // If it's the products step, trigger product entry UI
-            if (question.field === 'products') {
-                setMessages(prev => [...prev, {
-                    id: generateUniqueId(),
-                    type: 'bot',
-                    content: `Let's add your products one by one. Start typing the item name below.`,
-                    timestamp: new Date(),
-                    showInput: true,
-                    inputType: 'products',
-                    expectedField: 'products'
-                }]);
-                setAwaitingInput(true);
-                return;
-            }
-
-            // Default question UI
-            setMessages(prev => [...prev, {
-                id: generateUniqueId(),
-                type: 'bot',
-                content: `${currentQuestion + 1}/${questions.length} - ${question.question}`,
-                timestamp: new Date(),
-                showInput: true,
-                inputType: question.type,
-                inputOptions: question.options,
-                expectedField: question.field
-            }]);
-            setAwaitingInput(true);
-        } else {
-            completeDataCollection();
-        }
-    }, [currentQuestion, questions, completeDataCollection, generateUniqueId]);
-
     useEffect(() => {
-        if (currentStep === 'data_collection' && awaitingInput === false) {
-            askNextQuestion();
-        }
-    }, [currentStep, currentQuestion, awaitingInput, askNextQuestion]);
+        // Apply background to all main containers
+        const applyBackgrounds = () => {
+            const containers = document.querySelectorAll('.bg-gray-800, .bg-gray-900, [class*="overflow"]');
+            containers.forEach(container => {
+                container.style.backgroundColor = '#1f2937';
+                container.style.backgroundImage = 'none';
+            });
+        };
 
-    // Initialize the chat on component mount
+        applyBackgrounds();
+
+        // Re-apply on resize or scroll (if needed)
+        window.addEventListener('resize', applyBackgrounds);
+        return () => window.removeEventListener('resize', applyBackgrounds);
+    }, []);
+
+    // Initialize the chat
     useEffect(() => {
         if (initialized) return;
-
-        // If saved state exists and indicates initialized, skip re-initialization
-        try {
-            const raw = typeof window !== 'undefined' ? localStorage.getItem(storageKey) : null;
-            if (raw) {
-                const saved = JSON.parse(raw);
-                if (saved?.initialized) {
-                    setInitialized(true);
-                    return;
-                }
-            }
-        } catch (_e) { }
 
         if (!documentsUploaded) {
             setMessages([{
@@ -271,13 +725,13 @@ const AIAgentPage = ({ user, onPageChange, onLogout, documentsUploaded = true })
                 {
                     id: 1,
                     type: 'bot',
-                    content: 'Hello! Welcome to ManuDocs AI Agent! 🤖\n\nI can help you generate professional export documents.',
+                    content: '🌍 Hello! Welcome to ManuDocs Export Document Assistant! 🤖\n\nI specialize in generating professional international trade documents.',
                     timestamp: new Date()
                 },
                 {
                     id: 2,
                     type: 'bot',
-                    content: 'Which documents would you like to generate?',
+                    content: 'Please select the export documents you want to generate. I will ask only the necessary questions for your selected documents.',
                     timestamp: new Date(),
                     showTemplateSelector: true
                 }
@@ -285,171 +739,413 @@ const AIAgentPage = ({ user, onPageChange, onLogout, documentsUploaded = true })
             setCurrentStep('template_selection');
             setInitialized(true);
         }, 1000);
-
-    }, [documentsUploaded, initialized, storageKey]);
-
-    const fetchCompanyData = async () => {
-        try {
-            setManualFillRequired(false); // reset on every attempt
-            setMessages(prev => [...prev, {
-                id: generateUniqueId(),
-                type: 'bot',
-                content: '🔄 Fetching your company information...',
-                timestamp: new Date()
-            }]);
-
-            // First try to fetch existing profile without .single() to avoid error when no rows exist
-            const { data, error } = await supabase
-                .from('user_profiles')
-                .select('*')
-                .eq('user_id', user.id)
-                .limit(1);
-
-            // Check if we got data
-            if (error) {
-                console.error('Supabase query error:', error);
-                throw error;
-            }
-
-            if (!data || data.length === 0) {
-                // No user profile found - prompt manual fill without defaults
-                console.log('No user profile found for user:', user.id);
-
-                setManualFillRequired(true);
-                setMessages(prev => [...prev, {
-                    id: generateUniqueId(),
-                    type: 'bot',
-                    content: 'We could not find your company information. Please fill it manually below.',
-                    manualFill: true,
-                    timestamp: new Date()
-                }]);
-
-                return null;
-            }
-
-
-            // Use the found profile data
-            const profileData = data[0];
-            setCompanyData(profileData);
-
-            setMessages(prev => [...prev, {
-                id: generateUniqueId(),
-                type: 'bot',
-                content: `✅ Company info loaded:\n\n• Company: ${profileData.company_name}\n• Address: ${profileData.comp_reg_address}\n\nNow, please answer some questions.`,
-                timestamp: new Date()
-            }]);
-
-            return profileData;
-
-        } catch (error) {
-            console.error('Supabase fetch error:', error);
-
-            // Fallback to manual entry on any error
-            setManualFillRequired(true);
-            setMessages(prev => [...prev, {
-                id: generateUniqueId(),
-                type: 'bot',
-                content: 'We could not retrieve your company information automatically. Please fill it manually below.',
-                manualFill: true,
-                timestamp: new Date()
-            }]);
-            return null;
-        }
-    }
-
+    }, [documentsUploaded, initialized]);
 
     // Handle template selection
-    const handleTemplateSelection = async () => {
-        const checkboxes = document.querySelectorAll('input[type="checkbox"]:checked');
-        const selected = Array.from(checkboxes).map(cb => ({
-            id: cb.value,
-            name: cb.getAttribute('data-name')
-        }));
+    const handleTemplateSelection = (templateId, isSelected) => {
+        setSelectedTemplates(prev => {
+            if (isSelected) {
+                return [...prev, { id: templateId, name: getTemplateName(templateId) }];
+            } else {
+                return prev.filter(t => t.id !== templateId);
+            }
+        });
+    };
 
-        if (selected.length === 0) {
-            alert('Please select at least one document to generate');
+    const getTemplateName = (templateId) => {
+        const templateNames = {
+            commercial_invoice: 'Commercial Invoice',
+            proforma_invoice: 'Proforma Invoice',
+            packing_list: 'Packing List',
+            quotation: 'Quotation'
+        };
+        return templateNames[templateId] || templateId;
+    };
+
+    const handleStartProcess = () => {
+        if (selectedTemplates.length === 0) {
+            alert('Please select at least one document to generate.');
             return;
         }
 
-        setSelectedTemplates(selected);
-
-        setMessages(prev => [...prev,
-        {
-            id: generateUniqueId(),
-            type: 'user',
-            content: `Selected: ${selected.map(t => t.name).join(', ')}`,
-            timestamp: new Date()
-        }
-        ]);
-        await fetchCompanyData();
-
-        setCurrentStep('data_collection');
-
-
-        // Fetch company data and then start questions
-        setCurrentQuestion(0);
-
-
-
-
-
-    };
-
-    // Handle user input
-    const handleUserInput = (inputValue, field) => {
-        setUserInputs(prev => ({
-            ...prev,
-            [field]: inputValue
-        }));
+        const selectedDocNames = selectedTemplates.map(t => t.name).join(', ');
 
         setMessages(prev => [...prev, {
             id: generateUniqueId(),
             type: 'user',
-            content: inputValue,
+            content: `Start generating: ${selectedDocNames}`,
             timestamp: new Date()
         }]);
 
-        setCurrentQuestion(prev => prev + 1);
+        setCurrentStep('data_collection');
+        setCurrentQuestion(0);
         setAwaitingInput(false);
 
-        // Disable the input in the previous message
+        setTimeout(() => {
+            askNextQuestion();
+        }, 100);
+    };
+
+    // Continue button handler
+    const handleContinueClick = useCallback(() => {
+        setShowContinueButton(false);
+        setCurrentStep('data_collection');
+        setCurrentQuestion(0);
+        setAwaitingInput(false);
+
+        setTimeout(() => {
+            askNextQuestion();
+        }, 100);
+    }, [askNextQuestion]);
+
+    // Auto-ask next question
+    useEffect(() => {
+        console.log('Auto-ask effect - currentStep:', currentStep, 'awaitingInput:', awaitingInput, 'currentQuestion:', currentQuestion);
+
+        if (currentStep === 'data_collection' && !awaitingInput && currentQuestion < questions.length) {
+            console.log('Auto-asking next question...');
+            const timer = setTimeout(() => {
+                askNextQuestion();
+            }, 100);
+            return () => clearTimeout(timer);
+        }
+
+        // If we've completed all questions but documents aren't generated, trigger completion
+        if (currentStep === 'data_collection' && !awaitingInput && currentQuestion >= questions.length) {
+            console.log('All questions completed, triggering document generation');
+            completeDataCollection();
+        }
+    }, [currentStep, currentQuestion, awaitingInput, askNextQuestion, questions.length, completeDataCollection]);
+
+    // Handle product addition
+    const handleAddProduct = () => {
+        if (!currentProduct.product_code || !currentProduct.description || !currentProduct.quantity || !currentProduct.unit_price) {
+            alert('Please fill in all required product details: Product Code, Description, Quantity, and Unit Price.');
+            return;
+        }
+
+        const totalAmount = (parseFloat(currentProduct.quantity) * parseFloat(currentProduct.unit_price)).toFixed(2);
+        const newProduct = {
+            ...currentProduct,
+            id: generateUniqueId(),
+            total_amount: totalAmount
+        };
+
+        setProducts(prev => [...prev, newProduct]);
+
+        const productSummary = `Added: ${newProduct.product_code} - ${newProduct.description} | Qty: ${newProduct.quantity} ${newProduct.unit} | Price: ${newProduct.unit_price} | Total: ${totalAmount}`;
+        setMessages(prev => [...prev, {
+            id: generateUniqueId(),
+            type: 'user',
+            content: productSummary,
+            timestamp: new Date()
+        }]);
+
+        // Reset current product form
+        setCurrentProduct({
+            product_code: '',
+            description: '',
+            hs_code: '',
+            unit: 'PCS',
+            quantity: '',
+            unit_price: '',
+            total_amount: ''
+        });
+    };
+
+    const handleFinishProducts = () => {
+        if (products.length === 0) {
+            alert("Please add at least one product before finishing.");
+            return;
+        }
+
+        const productsSummary = `Added ${products.length} product(s):\n${products.map((p, i) => `${i + 1}. ${p.product_code} - ${p.description} (${p.quantity} ${p.unit})`).join('\n')}`;
+
+        // Add user message with products summary
+        setMessages(prev => [...prev, {
+            id: generateUniqueId(),
+            type: 'user',
+            content: productsSummary,
+            timestamp: new Date()
+        }]);
+
+        // Update the products field in userInputs
+        setUserInputs(prev => ({
+            ...prev,
+            products: products
+        }));
+
+        // Mark the products question as answered
         setMessages(prevMessages =>
             prevMessages.map(msg =>
-                msg.showInput && msg.expectedField === field
-                    ? { ...msg, showInput: false, inputDisabled: true, userAnswer: inputValue }
+                msg.showInput && msg.expectedField === 'products'
+                    ? { ...msg, showInput: false, inputDisabled: true, userAnswer: `Added ${products.length} product(s)` }
                     : msg
             )
         );
+
+        setAwaitingInput(false);
+
+        // Move to next question after products
+        const nextIndex = currentQuestion + 1;
+        console.log('Moving from products to next question index:', nextIndex);
+        setCurrentQuestion(nextIndex);
     };
 
+    // Handle packing info addition
+    const handleAddPackingInfo = () => {
+        if (!currentPacking.product_index || !currentPacking.number_of_packages || !currentPacking.net_weight || !currentPacking.gross_weight) {
+            alert('Please fill in all required packing details: Product Reference, Number of Packages, Net Weight, and Gross Weight.');
+            return;
+        }
+
+        const newPacking = {
+            ...currentPacking,
+            id: generateUniqueId(),
+            measurements: `${currentPacking.length || ''}×${currentPacking.width || ''}×${currentPacking.height || ''}`
+        };
+
+        setPackingInfo(prev => [...prev, newPacking]);
+
+        const packingSummary = `Added packing for Product ${currentPacking.product_index}: ${currentPacking.kind_of_packages} × ${currentPacking.number_of_packages} | Net: ${currentPacking.net_weight}Kg | Gross: ${currentPacking.gross_weight}Kg`;
+        setMessages(prev => [...prev, {
+            id: generateUniqueId(),
+            type: 'user',
+            content: packingSummary,
+            timestamp: new Date()
+        }]);
+
+        setCurrentPacking({
+            product_index: '',
+            kind_of_packages: 'Carton',
+            number_of_packages: '',
+            net_weight: '',
+            gross_weight: '',
+            length: '',
+            width: '',
+            height: ''
+        });
+    };
+
+    const handleFinishPacking = () => {
+        if (packingInfo.length === 0) {
+            alert("Please add at least one packing entry before finishing.");
+            return;
+        }
+
+        const packingSummary = `Added ${packingInfo.length} packing entries`;
+        setMessages(prev => [...prev, {
+            id: generateUniqueId(),
+            type: 'user',
+            content: packingSummary,
+            timestamp: new Date()
+        }]);
+
+        // Update the packing_info field in userInputs
+        setUserInputs(prev => ({
+            ...prev,
+            packing_info: packingInfo
+        }));
+
+        setMessages(prevMessages =>
+            prevMessages.map(msg =>
+                msg.showInput && msg.expectedField === 'packing_info'
+                    ? { ...msg, showInput: false, inputDisabled: true, userAnswer: `Added ${packingInfo.length} packing entries` }
+                    : msg
+            )
+        );
+
+        setAwaitingInput(false);
+
+        // Move to next question after packing
+        const nextIndex = currentQuestion + 1;
+        console.log('Moving from packing to next question index:', nextIndex);
+        setCurrentQuestion(nextIndex);
+    };
+
+    // Download functions
     const downloadAllPdfs = async () => {
         if (generatedDocuments.length === 0) {
             alert("No documents generated to download.");
             return;
         }
-        for (const doc of generatedDocuments) {
-            const container = document.createElement('div');
-            container.style.position = 'fixed';  // taaki screen pe na dikhe
-            container.style.left = '-9999px';
-            container.innerHTML = doc.html;
-            document.body.appendChild(container);
 
-            const canvas = await html2canvas(container, { scale: 2 });
+        try {
+            for (const doc of generatedDocuments) {
+                // Create a temporary container
+                const container = document.createElement('div');
+                container.style.width = '794px';
+                container.style.padding = '20px';
+                container.style.backgroundColor = 'white';
+                container.style.position = 'absolute';
+                container.style.left = '-9999px';
+                container.style.top = '0';
 
-            document.body.removeChild(container);
+                document.body.appendChild(container);
 
-            const imgData = canvas.toDataURL('image/png');
+                try {
+                    // Get current data with edits applied
+                    const currentData = getCurrentDocumentData();
 
-            const pdf = new jsPDF('p', 'pt', 'a4');
-            const pdfWidth = pdf.internal.pageSize.getWidth();
-            const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+                    const templateElement = renderTemplateComponent(doc.id, {
+                        ...doc.props,
+                        ...currentData
+                    });
 
-            pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-            pdf.save(`${doc.name || 'Document'}.pdf`);
+                    if (ReactDOM.createRoot) {
+                        const root = ReactDOM.createRoot(container);
+                        root.render(templateElement);
+                    } else {
+                        ReactDOM.render(templateElement, container);
+                    }
+
+                    // Wait for rendering to complete
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+
+                    // Use html2canvas to capture the content
+                    const canvas = await html2canvas(container, {
+                        scale: 2,
+                        useCORS: true,
+                        allowTaint: false,
+                        width: 794,
+                        windowWidth: 794,
+                        logging: false
+                    });
+
+                    const imgData = canvas.toDataURL('image/png');
+                    const pdf = new jsPDF({
+                        orientation: 'portrait',
+                        unit: 'mm',
+                        format: 'a4'
+                    });
+
+                    const imgWidth = 210; // A4 width in mm
+                    const pageHeight = 295; // A4 height in mm
+                    const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+                    let heightLeft = imgHeight;
+                    let position = 0;
+
+                    pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+                    heightLeft -= pageHeight;
+
+                    while (heightLeft >= 0) {
+                        position = heightLeft - imgHeight;
+                        pdf.addPage();
+                        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+                        heightLeft -= pageHeight;
+                    }
+
+                    pdf.save(`${doc.name.replace(/\s+/g, '_')}.pdf`);
+                } finally {
+                    // Always remove the container
+                    if (document.body.contains(container)) {
+                        document.body.removeChild(container);
+                    }
+                }
+            }
+
+            alert(`✅ ${generatedDocuments.length} professional export documents downloaded successfully!`);
+        } catch (error) {
+            console.error('Error downloading PDFs:', error);
+            alert('❌ Error downloading documents. Please try again.');
         }
     };
 
-    // Function to generate PDF binary data and send via email webhook
+    const downloadIndividualPdf = async (docIndex) => {
+        if (generatedDocuments.length === 0) {
+            alert("No documents generated to download.");
+            return;
+        }
+
+        const doc = generatedDocuments[docIndex];
+
+        try {
+            // Create a temporary container
+            const container = document.createElement('div');
+            container.style.width = '794px';
+            container.style.padding = '20px';
+            container.style.backgroundColor = 'white';
+            container.style.position = 'absolute';
+            container.style.left = '-9999px';
+            container.style.top = '0';
+            container.style.fontFamily = 'Arial, sans-serif';
+
+            document.body.appendChild(container);
+
+            try {
+                // Get current data with edits
+                const currentData = getCurrentDocumentData();
+
+                console.log('📥 Downloading PDF with data:', currentData);
+
+                // Render the template component with current data
+                const templateElement = renderTemplateComponent(doc.id, {
+                    ...doc.props,
+                    ...currentData
+                });
+
+                if (ReactDOM.createRoot) {
+                    const root = ReactDOM.createRoot(container);
+                    root.render(templateElement);
+                } else {
+                    ReactDOM.render(templateElement, container);
+                }
+
+                // Wait for rendering to complete
+                await new Promise(resolve => setTimeout(resolve, 1500));
+
+                // Use html2canvas to capture the content
+                const canvas = await html2canvas(container, {
+                    scale: 2,
+                    useCORS: true,
+                    allowTaint: false,
+                    width: 794,
+                    windowWidth: 794,
+                    logging: false,
+                    backgroundColor: '#ffffff'
+                });
+
+                const imgData = canvas.toDataURL('image/png');
+                const pdf = new jsPDF({
+                    orientation: 'portrait',
+                    unit: 'mm',
+                    format: 'a4'
+                });
+
+                const imgWidth = 210; // A4 width in mm
+                const pageHeight = 295; // A4 height in mm
+                const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+                let heightLeft = imgHeight;
+                let position = 0;
+
+                pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+                heightLeft -= pageHeight;
+
+                while (heightLeft >= 0) {
+                    position = heightLeft - imgHeight;
+                    pdf.addPage();
+                    pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+                    heightLeft -= pageHeight;
+                }
+
+                pdf.save(`${doc.name.replace(/\s+/g, '_')}.pdf`);
+
+                alert(`✅ ${doc.name} downloaded successfully with all edits!`);
+            } finally {
+                // Always remove the container
+                if (document.body.contains(container)) {
+                    document.body.removeChild(container);
+                }
+            }
+        } catch (error) {
+            console.error('Error downloading PDF:', error);
+            alert(`❌ Error downloading ${doc.name}. Please try again.`);
+        }
+    };
+
+    // Email webhook function
     const sendPdfViaEmail = async () => {
         if (generatedDocuments.length === 0) {
             alert("No documents generated to send.");
@@ -460,57 +1156,93 @@ const AIAgentPage = ({ user, onPageChange, onLogout, documentsUploaded = true })
 
         try {
             const userEmail = user?.email || user?.user_metadata?.email || 'unknown@example.com';
-            console.log('Generating PDFs and sending via email webhook for user:', userEmail);
+            console.log('Generating combined PDF and sending via email webhook for user:', userEmail);
 
-            const pdfDataArray = [];
+            const pdf = new jsPDF('p', 'pt', 'a4');
+            let currentPage = 0;
 
-            // Generate PDF binary data for each document
-            for (const doc of generatedDocuments) {
+            for (let i = 0; i < generatedDocuments.length; i++) {
+                const doc = generatedDocuments[i];
                 const container = document.createElement('div');
                 container.style.position = 'fixed';
                 container.style.left = '-9999px';
-                container.innerHTML = doc.html;
+                container.style.width = '794px';
+                container.style.padding = '20px';
+                container.style.backgroundColor = 'white';
+
                 document.body.appendChild(container);
 
-                const canvas = await html2canvas(container, { scale: 2 });
-                document.body.removeChild(container);
+                try {
+                    // Get current data with edits
+                    const currentData = getCurrentDocumentData();
 
-                const imgData = canvas.toDataURL('image/png');
+                    // Render the template component with updated data
+                    const templateElement = renderTemplateComponent(doc.id, {
+                        ...doc.props,
+                        ...currentData
+                    });
 
-                const pdf = new jsPDF('p', 'pt', 'a4');
-                const pdfWidth = pdf.internal.pageSize.getWidth();
-                const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+                    if (ReactDOM.createRoot) {
+                        const root = ReactDOM.createRoot(container);
+                        root.render(templateElement);
+                    } else {
+                        ReactDOM.render(templateElement, container);
+                    }
 
-                pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+                    // Wait for rendering
+                    await new Promise(resolve => setTimeout(resolve, 500));
 
-                // Get PDF as binary data (ArrayBuffer)
-                const pdfArrayBuffer = pdf.output('arraybuffer');
+                    const canvas = await html2canvas(container, {
+                        scale: 1.5,
+                        useCORS: true,
+                        allowTaint: false,
+                        width: 794,
+                        windowWidth: 794,
+                        logging: false
+                    });
 
-                // Convert ArrayBuffer to base64 more efficiently (avoiding stack overflow)
-                const uint8Array = new Uint8Array(pdfArrayBuffer);
-                let binaryString = '';
-                const chunkSize = 8192; // Process in chunks to avoid stack overflow
+                    const imgData = canvas.toDataURL('image/jpeg', 0.7);
+                    const pdfWidth = pdf.internal.pageSize.getWidth();
+                    const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
 
-                for (let i = 0; i < uint8Array.length; i += chunkSize) {
-                    const chunk = uint8Array.subarray(i, i + chunkSize);
-                    binaryString += String.fromCharCode.apply(null, chunk);
+                    if (currentPage > 0) {
+                        pdf.addPage();
+                    }
+
+                    pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight, undefined, 'FAST');
+                    pdf.setFontSize(12);
+                    pdf.setTextColor(100);
+                    pdf.text(`Document: ${doc.name || 'Untitled'}`, 40, 30);
+                    pdf.text(`Page ${currentPage + 1}`, pdfWidth - 60, 30);
+                    currentPage++;
+                } finally {
+                    if (document.body.contains(container)) {
+                        document.body.removeChild(container);
+                    }
                 }
-
-                const pdfBase64 = btoa(binaryString);
-
-                pdfDataArray.push({
-                    filename: `${doc.name || 'Document'}.pdf`,
-                    base64Data: pdfBase64,
-                    mimetype: 'application/pdf',
-                    size: pdfArrayBuffer.byteLength,
-                    documentType: doc.type,
-                    documentName: doc.name
-                });
             }
 
-            // Send to n8n webhook with PDF binary data
-            const webhookUrl = 'https://snobbily-tombless-louisa.ngrok-free.dev/webhook/60c9760c-650d-471c-9d4f-e7d4e362980f';
+            const pdfArrayBuffer = pdf.output('arraybuffer');
+            const uint8Array = new Uint8Array(pdfArrayBuffer);
+            let binaryString = '';
+            const chunkSize = 8192;
 
+            for (let i = 0; i < uint8Array.length; i += chunkSize) {
+                const chunk = uint8Array.subarray(i, i + chunkSize);
+                binaryString += String.fromCharCode.apply(null, chunk);
+            }
+
+            const pdfBase64 = btoa(binaryString);
+            const pdfDataArray = [{
+                filename: `Export_Documents_${new Date().toISOString().split('T')[0]}.pdf`,
+                base64Data: pdfBase64,
+                mimetype: 'application/pdf',
+                size: pdfArrayBuffer.byteLength,
+                documentType: 'combined',
+                documentName: 'All Export Documents'
+            }];
+
+            const webhookUrl = 'https://snobbily-tombless-louisa.ngrok-free.dev/webhook/60c9760c-650d-471c-9d4f-e7d4e362980f';
             const payload = {
                 action: 'send_email',
                 userEmail: userEmail,
@@ -521,21 +1253,14 @@ const AIAgentPage = ({ user, onPageChange, onLogout, documentsUploaded = true })
                 })),
                 pdfFiles: pdfDataArray,
                 companyData: companyData,
-                userInputs: userInputs,
-                timestamp: new Date().toISOString()
+                userInputs: getCurrentDocumentData(),
+                timestamp: new Date().toISOString(),
+                documentCount: generatedDocuments.length,
+                isCombined: true
             };
 
-            console.log('Sending PDF binary data to webhook:', {
-                ...payload,
-                pdfFiles: payload.pdfFiles.map(pdf => ({
-                    ...pdf,
-                    base64Data: `[${pdf.base64Data.length} characters]` // Don't log the full base64
-                }))
-            });
-
-            // Add timeout to prevent hanging
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+            const timeoutId = setTimeout(() => controller.abort(), 60000);
 
             const response = await fetch(webhookUrl, {
                 method: 'POST',
@@ -549,26 +1274,467 @@ const AIAgentPage = ({ user, onPageChange, onLogout, documentsUploaded = true })
             clearTimeout(timeoutId);
 
             if (response.ok) {
-                alert('✅ PDFs sent successfully via email webhook!');
-                console.log('Successfully sent PDFs to webhook');
+                alert(`✅ ${generatedDocuments.length} documents combined and sent successfully via email!`);
+                console.log('Successfully sent combined PDF to webhook');
             } else {
                 console.error('Webhook response error:', response.status, response.statusText);
-                alert('❌ Failed to send PDFs via webhook. Check console for details.');
+                alert('❌ Failed to send documents via webhook. Check console for details.');
             }
         } catch (error) {
-            console.error('Error sending PDFs via webhook:', error);
+            console.error('Error sending combined PDF via webhook:', error);
             if (error.name === 'AbortError') {
                 alert('❌ Request timed out. Please try again.');
             } else {
-                alert('❌ Error sending PDFs. Check console for details.');
+                alert('❌ Error sending documents. Check console for details.');
             }
         } finally {
             setIsSendingEmail(false);
         }
     };
 
+    const handleSendMessage = useCallback(() => {
+        if (!userMessage.trim()) return;
+
+        const newMessage = {
+            id: generateUniqueId(),
+            type: 'user',
+            content: userMessage,
+            timestamp: new Date()
+        };
+
+        setMessages(prev => [...prev, newMessage]);
+        setUserMessage('');
+
+        setTimeout(() => {
+            setMessages(prev => [...prev, {
+                id: generateUniqueId(),
+                type: 'bot',
+                content: 'I understand. Let me continue with the export document generation process.',
+                timestamp: new Date()
+            }]);
+        }, 1000);
+    }, [userMessage, generateUniqueId]);
+
+    // New Edit Functionality
+    const startEditing = useCallback(() => {
+        // Initialize edit data with current user inputs
+        const currentData = getCurrentDocumentData();
+        setEditData(currentData);
+        setIsEditing(true);
+        setActiveEditTab('exporter');
+    }, [getCurrentDocumentData]);
+
+    const handleEditFieldChange = useCallback((field, value) => {
+        setEditData(prev => ({
+            ...prev,
+            [field]: value
+        }));
+    }, []);
+
+    const handleSaveEdits = useCallback(() => {
+        // Update the main userInputs with edited data
+        const updatedData = { ...editData };
+
+        // Remove internal fields that shouldn't be in userInputs
+        const { products: editProducts, packing_info: editPacking, ...restEditData } = updatedData;
+
+        setUserInputs(restEditData);
+
+        // Update products and packing if they were edited
+        if (editProducts) {
+            setProducts(editProducts);
+        }
+        if (editPacking) {
+            setPackingInfo(editPacking);
+        }
+
+        // Regenerate documents with updated data
+        const finalData = getCurrentDocumentData();
+
+        const companyDataForRegen = {
+            company_name: restEditData.exporter_company_name || userInputs.exporter_company_name,
+            comp_reg_address: restEditData.exporter_address || userInputs.exporter_address,
+            gstin: restEditData.exporter_gstin || userInputs.exporter_gstin
+        };
+
+        try {
+            const updatedGeneratedDocs = generateDocuments(selectedTemplates, companyDataForRegen, finalData);
+            setGeneratedDocuments(updatedGeneratedDocs);
+
+            setIsEditing(false);
+            alert('✅ Changes saved successfully! Your documents have been updated.');
+        } catch (error) {
+            console.error('Error regenerating documents:', error);
+            alert('❌ Error updating documents. Please try again.');
+        }
+    }, [editData, userInputs, getCurrentDocumentData, selectedTemplates]);
+
+    const cancelEditing = useCallback(() => {
+        setIsEditing(false);
+        setEditData({});
+    }, []);
+
+    // Render edit form based on active tab
+    const renderEditForm = () => {
+        const categoryQuestions = questionsByCategory[activeEditTab] || [];
+
+        return (
+            <div className="space-y-4 max-h-96 overflow-y-auto">
+                {categoryQuestions.map((question) => {
+                    if (question.condition) {
+                        const conditionField = question.condition.field;
+                        const conditionValue = question.condition.value;
+                        if (editData[conditionField] !== conditionValue) {
+                            return null;
+                        }
+                    }
+
+                    return (
+                        <div key={question.field} className="space-y-2">
+                            <label className="block text-sm font-medium text-white">
+                                {question.question}
+                                {question.required && <span className="text-red-400 ml-1">*</span>}
+                            </label>
+
+                            {question.type === 'text' && (
+                                <input
+                                    type="text"
+                                    value={editData[question.field] || ''}
+                                    onChange={(e) => handleEditFieldChange(question.field, e.target.value)}
+                                    className="w-full p-2 border border-gray-600 rounded bg-gray-700 text-white"
+                                    placeholder={`Enter ${question.field.replace(/_/g, ' ')}...`}
+                                />
+                            )}
+
+                            {question.type === 'textarea' && (
+                                <textarea
+                                    value={editData[question.field] || ''}
+                                    onChange={(e) => handleEditFieldChange(question.field, e.target.value)}
+                                    className="w-full p-2 border border-gray-600 rounded bg-gray-700 text-white"
+                                    rows="3"
+                                    placeholder={`Enter ${question.field.replace(/_/g, ' ')}...`}
+                                />
+                            )}
+
+                            {question.type === 'select' && (
+                                <select
+                                    value={editData[question.field] || ''}
+                                    onChange={(e) => handleEditFieldChange(question.field, e.target.value)}
+                                    className="w-full p-2 border border-gray-600 rounded bg-gray-700 text-white"
+                                >
+                                    <option value="">Select an option</option>
+                                    {question.options?.map(option => (
+                                        <option key={option} value={option}>{option}</option>
+                                    ))}
+                                </select>
+                            )}
+
+                            {question.type === 'date' && (
+                                <input
+                                    type="date"
+                                    value={editData[question.field] || ''}
+                                    onChange={(e) => handleEditFieldChange(question.field, e.target.value)}
+                                    className="w-full p-2 border border-gray-600 rounded bg-gray-700 text-white"
+                                />
+                            )}
+                        </div>
+                    );
+                })}
+
+                {/* Products editing */}
+                {activeEditTab === 'products' && (
+                    <div className="space-y-4">
+                        <h4 className="font-semibold text-white">Products</h4>
+                        {editData.products?.map((product, index) => (
+                            <div key={product.id || index} className="p-3 border border-gray-600 rounded bg-gray-700">
+                                <div className="grid grid-cols-2 gap-2 mb-2">
+                                    <input
+                                        type="text"
+                                        value={product.product_code || ''}
+                                        onChange={(e) => {
+                                            const newProducts = [...editData.products];
+                                            newProducts[index] = {
+                                                ...newProducts[index],
+                                                product_code: e.target.value,
+                                                total_amount: (parseFloat(newProducts[index].quantity) || 0) * (parseFloat(newProducts[index].unit_price) || 0)
+                                            };
+                                            handleEditFieldChange('products', newProducts);
+                                        }}
+                                        className="p-2 border border-gray-600 rounded bg-gray-800 text-white text-sm"
+                                        placeholder="Product Code"
+                                    />
+                                    <input
+                                        type="text"
+                                        value={product.hs_code || ''}
+                                        onChange={(e) => {
+                                            const newProducts = [...editData.products];
+                                            newProducts[index] = { ...newProducts[index], hs_code: e.target.value };
+                                            handleEditFieldChange('products', newProducts);
+                                        }}
+                                        className="p-2 border border-gray-600 rounded bg-gray-800 text-white text-sm"
+                                        placeholder="HS Code"
+                                    />
+                                </div>
+                                <textarea
+                                    value={product.description || ''}
+                                    onChange={(e) => {
+                                        const newProducts = [...editData.products];
+                                        newProducts[index] = { ...newProducts[index], description: e.target.value };
+                                        handleEditFieldChange('products', newProducts);
+                                    }}
+                                    className="w-full p-2 border border-gray-600 rounded bg-gray-800 text-white text-sm mb-2"
+                                    placeholder="Description"
+                                    rows="2"
+                                />
+                                <div className="grid grid-cols-3 gap-2">
+                                    <input
+                                        type="number"
+                                        value={product.quantity || ''}
+                                        onChange={(e) => {
+                                            const newProducts = [...editData.products];
+                                            newProducts[index] = {
+                                                ...newProducts[index],
+                                                quantity: e.target.value,
+                                                total_amount: (parseFloat(e.target.value) || 0) * (parseFloat(newProducts[index].unit_price) || 0)
+                                            };
+                                            handleEditFieldChange('products', newProducts);
+                                        }}
+                                        className="p-2 border border-gray-600 rounded bg-gray-800 text-white text-sm"
+                                        placeholder="Quantity"
+                                    />
+                                    <select
+                                        value={product.unit || 'PCS'}
+                                        onChange={(e) => {
+                                            const newProducts = [...editData.products];
+                                            newProducts[index] = { ...newProducts[index], unit: e.target.value };
+                                            handleEditFieldChange('products', newProducts);
+                                        }}
+                                        className="p-2 border border-gray-600 rounded bg-gray-800 text-white text-sm"
+                                    >
+                                        <option value="PCS">PCS</option>
+                                        <option value="KG">KG</option>
+                                        <option value="M">M</option>
+                                        <option value="M²">M²</option>
+                                        <option value="M³">M³</option>
+                                        <option value="L">L</option>
+                                        <option value="SET">SET</option>
+                                        <option value="BOX">BOX</option>
+                                        <option value="CARTON">CARTON</option>
+                                    </select>
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        value={product.unit_price || ''}
+                                        onChange={(e) => {
+                                            const newProducts = [...editData.products];
+                                            newProducts[index] = {
+                                                ...newProducts[index],
+                                                unit_price: e.target.value,
+                                                total_amount: (parseFloat(newProducts[index].quantity) || 0) * (parseFloat(e.target.value) || 0)
+                                            };
+                                            handleEditFieldChange('products', newProducts);
+                                        }}
+                                        className="p-2 border border-gray-600 rounded bg-gray-800 text-white text-sm"
+                                        placeholder="Unit Price"
+                                    />
+                                </div>
+                                {product.total_amount && (
+                                    <div className="mt-2 text-sm text-green-400">
+                                        Total: {product.total_amount}
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                )}
+
+                {/* Packing info editing */}
+                {activeEditTab === 'packing' && (
+                    <div className="space-y-4">
+                        <h4 className="font-semibold text-white">Packing Information</h4>
+                        {editData.packing_info?.map((packing, index) => (
+                            <div key={packing.id || index} className="p-3 border border-gray-600 rounded bg-gray-700">
+                                <div className="grid grid-cols-2 gap-2 mb-2">
+                                    <select
+                                        value={packing.product_index || ''}
+                                        onChange={(e) => {
+                                            const newPacking = [...editData.packing_info];
+                                            newPacking[index] = { ...newPacking[index], product_index: e.target.value };
+                                            handleEditFieldChange('packing_info', newPacking);
+                                        }}
+                                        className="p-2 border border-gray-600 rounded bg-gray-800 text-white text-sm"
+                                    >
+                                        <option value="">Select Product</option>
+                                        {editData.products?.map((product, prodIndex) => (
+                                            <option key={prodIndex} value={prodIndex + 1}>
+                                                {product.product_code} - {product.description}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <select
+                                        value={packing.kind_of_packages || 'Carton'}
+                                        onChange={(e) => {
+                                            const newPacking = [...editData.packing_info];
+                                            newPacking[index] = { ...newPacking[index], kind_of_packages: e.target.value };
+                                            handleEditFieldChange('packing_info', newPacking);
+                                        }}
+                                        className="p-2 border border-gray-600 rounded bg-gray-800 text-white text-sm"
+                                    >
+                                        <option value="Carton">Carton</option>
+                                        <option value="Box">Box</option>
+                                        <option value="Crate">Crate</option>
+                                        <option value="Drum">Drum</option>
+                                        <option value="Bag">Bag</option>
+                                        <option value="Pallet">Pallet</option>
+                                        <option value="Bundle">Bundle</option>
+                                    </select>
+                                </div>
+                                <div className="grid grid-cols-3 gap-2 mb-2">
+                                    <input
+                                        type="number"
+                                        value={packing.number_of_packages || ''}
+                                        onChange={(e) => {
+                                            const newPacking = [...editData.packing_info];
+                                            newPacking[index] = { ...newPacking[index], number_of_packages: e.target.value };
+                                            handleEditFieldChange('packing_info', newPacking);
+                                        }}
+                                        className="p-2 border border-gray-600 rounded bg-gray-800 text-white text-sm"
+                                        placeholder="No. of Packages"
+                                    />
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        value={packing.net_weight || ''}
+                                        onChange={(e) => {
+                                            const newPacking = [...editData.packing_info];
+                                            newPacking[index] = { ...newPacking[index], net_weight: e.target.value };
+                                            handleEditFieldChange('packing_info', newPacking);
+                                        }}
+                                        className="p-2 border border-gray-600 rounded bg-gray-800 text-white text-sm"
+                                        placeholder="Net Weight (Kg)"
+                                    />
+                                    <input
+                                        type="number"
+                                        step="0.01"
+                                        value={packing.gross_weight || ''}
+                                        onChange={(e) => {
+                                            const newPacking = [...editData.packing_info];
+                                            newPacking[index] = { ...newPacking[index], gross_weight: e.target.value };
+                                            handleEditFieldChange('packing_info', newPacking);
+                                        }}
+                                        className="p-2 border border-gray-600 rounded bg-gray-800 text-white text-sm"
+                                        placeholder="Gross Weight (Kg)"
+                                    />
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+        );
+    };
+
+    // Render document preview with current data
+    const renderDocumentPreview = () => {
+        if (generatedDocuments.length === 0 || !generatedDocuments[activeDocIndex]) {
+            return (
+                <div className="h-full flex items-center justify-center text-gray-500">
+                    Documents will appear here after generation
+                </div>
+            );
+        }
+
+        const currentData = getCurrentDocumentData();
+        const doc = generatedDocuments[activeDocIndex];
+
+        return (
+            <div className="w-full h-full">
+                {renderTemplateComponent(doc.id, {
+                    ...doc.props,
+                    ...currentData
+                })}
+            </div>
+        );
+    };
+
+    // Template selection component - ONLY 4 DOCUMENTS NOW
+    const renderTemplateSelector = () => {
+        const templates = [
+            { id: 'commercial_invoice', name: 'Commercial Invoice', desc: 'Main international trade invoice with compliance details', icon: '📄' },
+            { id: 'proforma_invoice', name: 'Proforma Invoice', desc: 'Quotation document for international buyers', icon: '📋' },
+            { id: 'packing_list', name: 'Packing List', desc: 'Detailed packaging and shipping information', icon: '📦' },
+            { id: 'quotation', name: 'Quotation', desc: 'Price quote for potential buyer', icon: '💰' }
+        ];
+
+        return (
+            <div className="mt-4 space-y-4">
+                <div className="text-sm text-gray-300 mb-4">
+                    Select the documents you want to generate. I will ask only the necessary questions for your selected documents.
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {templates.map((template) => (
+                        <label
+                            key={template.id}
+                            className={`flex items-start space-x-3 p-3 border rounded-lg cursor-pointer transition-colors ${selectedTemplates.some(t => t.id === template.id)
+                                ? 'border-manu-green bg-green-900/20'
+                                : 'border-gray-600 bg-gray-700 hover:bg-gray-600'
+                                }`}
+                        >
+                            <input
+                                type="checkbox"
+                                checked={selectedTemplates.some(t => t.id === template.id)}
+                                onChange={(e) => handleTemplateSelection(template.id, e.target.checked)}
+                                className="mt-1 rounded border-gray-600 bg-gray-700 text-manu-green focus:ring-manu-green"
+                            />
+                            <div className="flex-1 min-w-0">
+                                <div className="flex items-center space-x-2">
+                                    <span className="text-lg">{template.icon}</span>
+                                    <div className="font-medium text-white text-sm">{template.name}</div>
+                                </div>
+                                <div className="text-xs text-gray-300 mt-1">{template.desc}</div>
+                            </div>
+                        </label>
+                    ))}
+                </div>
+
+                {selectedTemplates.length > 0 && (
+                    <div className="mt-4 p-3 bg-gray-700 rounded-lg">
+                        <div className="text-sm font-medium text-white mb-2">
+                            Selected Documents ({selectedTemplates.length}):
+                        </div>
+                        <div className="text-xs text-gray-300">
+                            {selectedTemplates.map(t => t.name).join(', ')}
+                        </div>
+                    </div>
+                )}
+
+                <button
+                    className={`w-full mt-4 px-4 py-3 rounded-lg transition-colors text-sm font-medium ${selectedTemplates.length === 0
+                        ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                        : 'bg-manu-green text-white hover:bg-green-600'
+                        }`}
+                    onClick={handleStartProcess}
+                    disabled={selectedTemplates.length === 0}
+                >
+                    {selectedTemplates.length === 0
+                        ? 'Please select at least one document'
+                        : `Start Generating ${selectedTemplates.length} Document${selectedTemplates.length > 1 ? 's' : ''}`
+                    }
+                </button>
+            </div>
+        );
+    };
+
     return (
-        <div className="min-h-screen bg-gray-50">
+        <div
+            className="min-h-screen bg-gray-900 text-white"
+            style={{
+                backgroundColor: '#1f2937',
+                background: 'linear-gradient(135deg, #1f2937 0%, #111827 100%)',
+                minHeight: '100vh'
+            }}
+        >
             <Header
                 user={user}
                 onPageChange={onPageChange}
@@ -576,68 +1742,49 @@ const AIAgentPage = ({ user, onPageChange, onLogout, documentsUploaded = true })
                 documentsUploaded={documentsUploaded}
             />
 
-            <div className="pt-16 h-screen flex">
-                {/* Back Button */}
-
-
+            <div className="pt-16 h-screen flex flex-col md:flex-row">
                 {/* Left Panel - Chat Interface */}
-                <div className="w-1/2 bg-white border-r border-gray-200 flex flex-col">
-                    {/* Chat Header */}
-                    <div className="p-4 border-b border-gray-200 bg-manu-green text-white">
+                <div className="w-full md:w-1/2 bg-gray-800 border-r border-gray-700 flex flex-col">
+                    <div className="p-4 border-b border-gray-700 bg-gray-900">
                         <div className="flex items-center space-x-3">
                             <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center">
                                 <MessageCircle className="text-manu-green" size={20} />
                             </div>
                             <div>
-                                <h3 className="font-semibold">E-CHA</h3>
-                                <p className="text-sm opacity-90">Export Document Assistant</p>
+                                <h3 className="font-semibold">Export Document Assistant</h3>
+                                <p className="text-sm opacity-90">
+                                    {selectedTemplates.length > 0
+                                        ? `${selectedTemplates.length} Document${selectedTemplates.length > 1 ? 's' : ''} Selected`
+                                        : 'Select Documents to Generate'
+                                    }
+                                </p>
                             </div>
                         </div>
                     </div>
 
-                    {/* Chat Messages */}
                     <div className="flex-1 p-4 overflow-y-auto space-y-4">
                         {messages.map((message) => (
-
-
-
-
-
                             <div
                                 key={message.id}
                                 className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
                             >
                                 <div className={`max-w-[80%] rounded-lg p-3 ${message.type === 'user'
                                     ? 'bg-manu-green text-white'
-                                    : 'bg-gray-100 text-gray-800'
+                                    : 'bg-gray-700 text-gray-100'
                                     }`}>
                                     <div className="whitespace-pre-wrap">{message.content}</div>
 
-                                    {/* Yahan manual fill form add karo */}
-                                    {message.manualFill && manualFillRequired && (
-                                        <div className="manual-fill-form p-4 border rounded bg-white mt-4">
-                                            <input
-                                                type="text"
-                                                placeholder="Company Name"
-                                                value={companyData?.company_name || ''}
-                                                onChange={(e) =>
-                                                    setCompanyData((prev) => ({ ...prev, company_name: e.target.value }))
-                                                }
-                                                className="mb-2 p-2 border rounded w-full"
-                                            />
-                                            <input
-                                                type="text"
-                                                placeholder="Company Address"
-                                                value={companyData?.comp_reg_address || ''}
-                                                onChange={(e) =>
-                                                    setCompanyData((prev) => ({ ...prev, comp_reg_address: e.target.value }))
-                                                }
-                                                className="mb-2 p-2 border rounded w-full"
-                                            />
+                                    {/* Template Selector */}
+                                    {message.showTemplateSelector && renderTemplateSelector()}
 
-                                            {/* Add Submit button */}
-
-                                        </div>
+                                    {/* Continue Button */}
+                                    {message.showContinueButton && showContinueButton && (
+                                        <button
+                                            onClick={handleContinueClick}
+                                            className="mt-3 bg-manu-green text-white px-4 py-2 rounded-lg hover:bg-green-600 transition-colors text-sm"
+                                        >
+                                            Continue to Export Questions
+                                        </button>
                                     )}
 
                                     {/* Upload Documents Button */}
@@ -646,114 +1793,119 @@ const AIAgentPage = ({ user, onPageChange, onLogout, documentsUploaded = true })
                                             onClick={() => onPageChange('upload')}
                                             className="mt-3 bg-manu-green text-white px-4 py-2 rounded-lg hover:bg-green-600 transition-colors text-sm"
                                         >
-                                            Upload Documents
+                                            Upload Company Documents
                                         </button>
                                     )}
 
-                                    {/* Template Selector */}
-                                    {message.showTemplateSelector && (
-                                        <div className="mt-4 space-y-2">
-                                            <p className="text-sm font-medium text-gray-700 mb-2">
-                                                Select documents to generate:
-                                            </p>
-
-                                            <div className="grid grid-cols-1 gap-2">
-                                                {[
-                                                    { id: 'commercial_invoice', name: 'Commercial Invoice', desc: 'Main export invoice' },
-                                                    { id: 'proforma_invoice', name: 'Proforma Invoice', desc: 'Quotation document' },
-                                                    { id: 'packing_list', name: 'Packing List', desc: 'Item packaging details' },
-                                                    { id: 'delivery_challan', name: 'Delivery Challan', desc: 'Export shipment details' },
-                                                    { id: 'credit_note', name: 'Credit Note', desc: 'Amount adjustment' },
-                                                    { id: 'debit_note', name: 'Debit Note', desc: 'Additional charges' }
-                                                ].map((template) => (
-                                                    <label key={template.id} className="flex items-center space-x-2 p-2 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer">
-                                                        <input
-                                                            type="checkbox"
-                                                            value={template.id}
-                                                            data-name={template.name}
-                                                            className="text-manu-green"
-                                                        />
-                                                        <div className="flex-1">
-                                                            <div className="font-medium text-sm">📄 {template.name}</div>
-                                                            <div className="text-xs text-gray-500">{template.desc}</div>
-                                                        </div>
-                                                    </label>
-                                                ))}
-                                            </div>
-
-                                            <button
-                                                className="w-full mt-3 bg-manu-green text-white px-4 py-2 rounded-lg hover:bg-green-600 transition-colors text-sm"
-                                                onClick={handleTemplateSelection}
-                                            >
-                                                Generate Selected Documents
-                                            </button>
-                                        </div>
-                                    )}
-
-                                    {/* Input Fields for Questions */}
+                                    {/* Input Fields */}
                                     {message.showInput && awaitingInput && (
                                         <div className="mt-4">
-                                            {message.inputType === 'text' && (
+                                            {/* Skip Button for non-required questions */}
+                                            {message.showSkip && (
+                                                <button
+                                                    onClick={skipCurrentQuestion}
+                                                    className="mb-3 flex items-center gap-2 px-3 py-1 text-xs bg-gray-600 text-gray-300 rounded hover:bg-gray-500 transition-colors"
+                                                >
+                                                    <SkipForward size={12} />
+                                                    Skip this question
+                                                </button>
+                                            )}
+
+                                            {/* File Input */}
+                                            {message.inputType === 'file' && (
                                                 <div className="space-y-2">
                                                     <input
-                                                        type="text"
-                                                        placeholder="Enter your answer..."
-                                                        className="w-full p-2 border border-gray-200 rounded-lg"
+                                                        type="file"
+                                                        accept={message.accept}
+                                                        className="w-full p-2 border border-gray-600 rounded-lg bg-gray-700 text-white"
+                                                        onChange={(e) => {
+                                                            const file = e.target.files[0];
+                                                            if (file) {
+                                                                if (file.size > 2 * 1024 * 1024) {
+                                                                    alert('File size must be less than 2MB');
+                                                                    return;
+                                                                }
+                                                                handleUserInput(file.name, message.expectedField, file);
+                                                            }
+                                                        }}
+                                                    />
+                                                    <p className="text-xs text-gray-400">Max file size: 2MB</p>
+                                                </div>
+                                            )}
+
+                                            {/* Text Input */}
+                                            {['text', 'email', 'number'].includes(message.inputType) && (
+                                                <div className="space-y-2">
+                                                    <input
+                                                        type={message.inputType}
+                                                        placeholder={`Enter ${message.expectedField.replace(/_/g, ' ')}...`}
+                                                        className="w-full p-2 border border-gray-600 rounded-lg bg-gray-700 text-white placeholder-gray-400"
                                                         autoFocus
+                                                        value={pendingInput}
+                                                        onChange={(e) => {
+                                                            setPendingInput(e.target.value);
+                                                            setCurrentInputField(message.expectedField);
+                                                            setShowConfirmButton(true);
+                                                        }}
                                                         onKeyDown={(e) => {
                                                             if (e.key === 'Enter' && e.target.value.trim()) {
                                                                 e.preventDefault();
                                                                 handleUserInput(e.target.value.trim(), message.expectedField);
-                                                                e.target.value = '';
+                                                                setPendingInput('');
+                                                                setShowConfirmButton(false);
                                                             }
                                                         }}
                                                     />
-                                                    <button
-                                                        onClick={(e) => {
-                                                            const input = e.target.previousElementSibling;
-                                                            if (input.value.trim()) {
-                                                                handleUserInput(input.value.trim(), message.expectedField);
-                                                                input.value = '';
-                                                            }
-                                                        }}
-                                                        className="w-full bg-manu-green text-white px-4 py-2 rounded-lg hover:bg-green-600 transition-colors text-sm"
-                                                    >
-                                                        Send Answer
-                                                    </button>
+                                                    {/* Show autofill message if available */}
+                                                    {message.autofillValue && (
+                                                        <p className="text-xs text-green-400">
+                                                            💡 Pre-filled from your previous sessions. You can edit this if needed.
+                                                        </p>
+                                                    )}
+                                                    {showConfirmButton && (
+                                                        <button
+                                                            onClick={handleConfirmInput}
+                                                            className="w-full bg-manu-green text-white px-4 py-2 rounded-lg hover:bg-green-600 transition-colors text-sm"
+                                                        >
+                                                            {message.autofillValue ? 'Confirm & Continue' : 'Send Answer'}
+                                                        </button>
+                                                    )}
                                                 </div>
                                             )}
 
+                                            {/* Textarea Input */}
                                             {message.inputType === 'textarea' && (
                                                 <div className="space-y-2">
                                                     <textarea
-                                                        placeholder="Enter complete address..."
+                                                        placeholder={`Enter ${message.expectedField.replace(/_/g, ' ')}...`}
                                                         rows="3"
-                                                        className="w-full p-2 border border-gray-200 rounded-lg"
+                                                        className="w-full p-2 border border-gray-600 rounded-lg bg-gray-700 text-white placeholder-gray-400"
                                                         autoFocus
-                                                        onKeyDown={(e) => {
-                                                            if (e.key === 'Enter' && e.ctrlKey && e.target.value.trim()) {
-                                                                e.preventDefault();
-                                                                handleUserInput(e.target.value.trim(), message.expectedField);
-                                                                e.target.value = '';
-                                                            }
+                                                        value={pendingInput}
+                                                        onChange={(e) => {
+                                                            setPendingInput(e.target.value);
+                                                            setCurrentInputField(message.expectedField);
+                                                            setShowConfirmButton(true);
                                                         }}
                                                     ></textarea>
-                                                    <button
-                                                        onClick={(e) => {
-                                                            const textarea = e.target.previousElementSibling;
-                                                            if (textarea.value.trim()) {
-                                                                handleUserInput(textarea.value.trim(), message.expectedField);
-                                                                textarea.value = '';
-                                                            }
-                                                        }}
-                                                        className="w-full bg-manu-green text-white px-4 py-2 rounded-lg hover:bg-green-600 transition-colors text-sm"
-                                                    >
-                                                        Send Answer
-                                                    </button>
-                                                    <p className="text-xs text-gray-500">Press Ctrl+Enter or click button</p>
+                                                    {/* Show autofill message if available */}
+                                                    {message.autofillValue && (
+                                                        <p className="text-xs text-green-400">
+                                                            💡 Pre-filled from your previous sessions. You can edit this if needed.
+                                                        </p>
+                                                    )}
+                                                    {showConfirmButton && (
+                                                        <button
+                                                            onClick={handleConfirmInput}
+                                                            className="w-full bg-manu-green text-white px-4 py-2 rounded-lg hover:bg-green-600 transition-colors text-sm"
+                                                        >
+                                                            {message.autofillValue ? 'Confirm & Continue' : 'Send Answer'}
+                                                        </button>
+                                                    )}
                                                 </div>
                                             )}
 
+                                            {/* Select Input */}
                                             {message.inputType === 'select' && (
                                                 <div className="space-y-2">
                                                     <div className="grid grid-cols-2 gap-2">
@@ -761,7 +1913,7 @@ const AIAgentPage = ({ user, onPageChange, onLogout, documentsUploaded = true })
                                                             <button
                                                                 key={option}
                                                                 onClick={() => handleUserInput(option, message.expectedField)}
-                                                                className="p-2 border border-gray-200 rounded-lg hover:bg-gray-50 text-sm hover:border-manu-green"
+                                                                className="p-2 border border-gray-600 rounded-lg hover:bg-gray-700 text-sm hover:border-manu-green text-white"
                                                             >
                                                                 {option}
                                                             </button>
@@ -770,213 +1922,358 @@ const AIAgentPage = ({ user, onPageChange, onLogout, documentsUploaded = true })
                                                 </div>
                                             )}
 
-                                            {message.inputType === 'products' && awaitingInput && (
-                                                <div className="space-y-2 mt-4">
-                                                    <input
-                                                        type="text"
-                                                        placeholder="Type item name..."
-                                                        className="w-full p-2 border border-gray-200 rounded-lg"
-                                                        value={currentProduct.item}
-                                                        onChange={e => {
-                                                            const val = e.target.value;
-
-                                                            // Show suggestions only if input length > 0
-                                                            setShowSuggestions(val.length > 0);
-
-                                                            // Filter ITEM_DATABASE based on full current input (name or description)
-                                                            const filtered = val.length > 0
-                                                                ? ITEM_DATABASE.filter(item =>
-                                                                    item.name.toLowerCase().includes(val.toLowerCase()) ||
-                                                                    item.description.toLowerCase().includes(val.toLowerCase())
-                                                                )
-                                                                : [];
-
-                                                            // Update filtered items list
-                                                            setFilteredItems(filtered);
-
-                                                            // Update currentProduct state with new item name
-                                                            setCurrentProduct(prev => ({ ...prev, item: val }));
-                                                        }}
-
-                                                        autoFocus
-                                                    />
-                                                    {showSuggestions && filteredItems.length > 0 && (
-                                                        <div className="border rounded bg-white shadow-md max-h-48 overflow-y-auto z-10">
-                                                            {filteredItems.map(item => (
-                                                                <div
-                                                                    key={item.hsCode}
-                                                                    className="p-2 hover:bg-manu-green hover:text-white cursor-pointer"
-                                                                    onClick={() => {
-                                                                        setCurrentProduct({
-                                                                            ...currentProduct,
-                                                                            item: item.name,
-                                                                            description: item.description,
-                                                                            hsCode: item.hsCode
-                                                                        });
-                                                                        setShowSuggestions(false);
-                                                                        setProductEntryStep(1);
+                                            {message.inputType === 'multiselect' && (
+                                                <div className="space-y-2">
+                                                    <div className="grid grid-cols-1 gap-2">
+                                                        {message.inputOptions?.map((option) => (
+                                                            <label key={option} className="flex items-center space-x-2 p-2 border border-gray-600 rounded-lg hover:bg-gray-700 cursor-pointer">
+                                                                <input
+                                                                    type="checkbox"
+                                                                    value={option}
+                                                                    onChange={(e) => {
+                                                                        const currentValues = pendingInput ? pendingInput.split(', ') : [];
+                                                                        if (e.target.checked) {
+                                                                            currentValues.push(option);
+                                                                        } else {
+                                                                            const index = currentValues.indexOf(option);
+                                                                            if (index > -1) currentValues.splice(index, 1);
+                                                                        }
+                                                                        setPendingInput(currentValues.join(', '));
+                                                                        setShowConfirmButton(currentValues.length > 0);
                                                                     }}
-                                                                >
-                                                                    <div className="font-semibold">{item.name}</div>
-                                                                    <div className="text-xs text-gray-500">{item.description}</div>
-                                                                    <div className="text-xs text-blue-600">HS Code: {item.hsCode}</div>
+                                                                    className="rounded border-gray-600 bg-gray-700 text-manu-green focus:ring-manu-green"
+                                                                />
+                                                                <span className="text-sm text-white">{option}</span>
+                                                            </label>
+                                                        ))}
+                                                    </div>
+                                                    {showConfirmButton && (
+                                                        <button
+                                                            onClick={handleConfirmInput}
+                                                            className="w-full bg-manu-green text-white px-4 py-2 rounded-lg hover:bg-green-600 transition-colors text-sm"
+                                                        >
+                                                            Confirm Selection
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            )}
+
+                                            {/* Date Input */}
+                                            {message.inputType === 'date' && (
+                                                <div className="space-y-2">
+                                                    <input
+                                                        type="date"
+                                                        className="w-full p-2 border border-gray-600 rounded-lg bg-gray-700 text-white"
+                                                        autoFocus
+                                                        onChange={(e) => {
+                                                            if (e.target.value) {
+                                                                handleUserInput(e.target.value, message.expectedField);
+                                                            }
+                                                        }}
+                                                    />
+                                                </div>
+                                            )}
+
+                                            {/* Products Input */}
+                                            {message.inputType === 'products' && (
+                                                <div className="space-y-3 mt-4">
+                                                    <div className="grid grid-cols-2 gap-2">
+                                                        <input
+                                                            type="text"
+                                                            placeholder="Product Code *"
+                                                            className="p-2 border border-gray-600 rounded-lg bg-gray-700 text-white placeholder-gray-400"
+                                                            value={currentProduct.product_code}
+                                                            onChange={e => setCurrentProduct(prev => ({ ...prev, product_code: e.target.value }))}
+                                                        />
+                                                        <input
+                                                            type="text"
+                                                            placeholder="HS Code"
+                                                            className="p-2 border border-gray-600 rounded-lg bg-gray-700 text-white placeholder-gray-400"
+                                                            value={currentProduct.hs_code}
+                                                            onChange={e => setCurrentProduct(prev => ({ ...prev, hs_code: e.target.value }))}
+                                                        />
+                                                    </div>
+                                                    <textarea
+                                                        placeholder="Product Description *"
+                                                        rows="2"
+                                                        className="w-full p-2 border border-gray-600 rounded-lg bg-gray-700 text-white placeholder-gray-400"
+                                                        value={currentProduct.description}
+                                                        onChange={e => setCurrentProduct(prev => ({ ...prev, description: e.target.value }))}
+                                                    />
+                                                    <div className="grid grid-cols-3 gap-2">
+                                                        <input
+                                                            type="number"
+                                                            placeholder="Quantity *"
+                                                            className="p-2 border border-gray-600 rounded-lg bg-gray-700 text-white placeholder-gray-400"
+                                                            value={currentProduct.quantity}
+                                                            onChange={e => setCurrentProduct(prev => ({ ...prev, quantity: e.target.value }))}
+                                                        />
+                                                        <select
+                                                            className="p-2 border border-gray-600 rounded-lg bg-gray-700 text-white"
+                                                            value={currentProduct.unit}
+                                                            onChange={e => setCurrentProduct(prev => ({ ...prev, unit: e.target.value }))}
+                                                        >
+                                                            <option value="PCS">PCS</option>
+                                                            <option value="KG">KG</option>
+                                                            <option value="M">M</option>
+                                                            <option value="M²">M²</option>
+                                                            <option value="M³">M³</option>
+                                                            <option value="L">L</option>
+                                                            <option value="SET">SET</option>
+                                                            <option value="BOX">BOX</option>
+                                                            <option value="CARTON">CARTON</option>
+                                                        </select>
+                                                        <input
+                                                            type="number"
+                                                            placeholder="Unit Price *"
+                                                            step="0.01"
+                                                            className="p-2 border border-gray-600 rounded-lg bg-gray-700 text-white placeholder-gray-400"
+                                                            value={currentProduct.unit_price}
+                                                            onChange={e => setCurrentProduct(prev => ({ ...prev, unit_price: e.target.value }))}
+                                                        />
+                                                    </div>
+
+                                                    <div className="flex gap-2">
+                                                        <button
+                                                            className={`flex-1 px-4 py-2 rounded-lg transition-colors text-sm ${(!currentProduct.product_code || !currentProduct.description || !currentProduct.quantity || !currentProduct.unit_price)
+                                                                ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                                                                : 'bg-manu-green text-white hover:bg-green-600'
+                                                                }`}
+                                                            onClick={handleAddProduct}
+                                                            disabled={!currentProduct.product_code || !currentProduct.description || !currentProduct.quantity || !currentProduct.unit_price}
+                                                        >
+                                                            Add Product
+                                                        </button>
+                                                        <button
+                                                            className={`flex-1 px-4 py-2 rounded-lg transition-colors text-sm ${products.length === 0
+                                                                ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                                                                : 'bg-blue-600 text-white hover:bg-blue-700'
+                                                                }`}
+                                                            onClick={handleFinishProducts}
+                                                            disabled={products.length === 0}
+                                                        >
+                                                            Finish ({products.length} added)
+                                                        </button>
+                                                    </div>
+
+                                                    {products.length > 0 && (
+                                                        <div className="mt-3 p-3 bg-gray-600 border border-gray-500 rounded">
+                                                            <h4 className="font-semibold mb-2 text-white">Products Added ({products.length}):</h4>
+                                                            {products.map((product, index) => (
+                                                                <div key={product.id} className="text-sm border-b border-gray-500 pb-2 mb-2 last:border-b-0">
+                                                                    <div className="text-white"><strong>{product.product_code}</strong> - {product.description}</div>
+                                                                    <div className="text-gray-300">Qty: {product.quantity} {product.unit} | Price: {product.unit_price} | Total: {product.total_amount}</div>
+                                                                    {product.hs_code && <div className="text-xs text-blue-400">HS Code: {product.hs_code}</div>}
                                                                 </div>
                                                             ))}
                                                         </div>
                                                     )}
-                                                    {currentProduct.description && (
-                                                        <div className="mt-2 p-2 bg-gray-50 border rounded">
-                                                            <div><strong>Description:</strong> {currentProduct.description}</div>
-                                                            <div><strong>HS Code:</strong> {currentProduct.hsCode}</div>
+                                                </div>
+                                            )}
+
+                                            {/* Packing Input */}
+                                            {message.inputType === 'packing' && (
+                                                <div className="space-y-3 mt-4">
+                                                    <div className="grid grid-cols-2 gap-2">
+                                                        <select
+                                                            className="p-2 border border-gray-600 rounded-lg bg-gray-700 text-white"
+                                                            value={currentPacking.product_index}
+                                                            onChange={e => setCurrentPacking(prev => ({ ...prev, product_index: e.target.value }))}
+                                                        >
+                                                            <option value="">Select Product *</option>
+                                                            {products.map((product, index) => (
+                                                                <option key={product.id} value={index + 1}>
+                                                                    {product.product_code} - {product.description}
+                                                                </option>
+                                                            ))}
+                                                        </select>
+                                                        <select
+                                                            className="p-2 border border-gray-600 rounded-lg bg-gray-700 text-white"
+                                                            value={currentPacking.kind_of_packages}
+                                                            onChange={e => setCurrentPacking(prev => ({ ...prev, kind_of_packages: e.target.value }))}
+                                                        >
+                                                            <option value="Carton">Carton</option>
+                                                            <option value="Box">Box</option>
+                                                            <option value="Crate">Crate</option>
+                                                            <option value="Drum">Drum</option>
+                                                            <option value="Bag">Bag</option>
+                                                            <option value="Pallet">Pallet</option>
+                                                            <option value="Bundle">Bundle</option>
+                                                        </select>
+                                                    </div>
+                                                    <div className="grid grid-cols-3 gap-2">
+                                                        <input
+                                                            type="number"
+                                                            placeholder="No. of Packages *"
+                                                            className="p-2 border border-gray-600 rounded-lg bg-gray-700 text-white placeholder-gray-400"
+                                                            value={currentPacking.number_of_packages}
+                                                            onChange={e => setCurrentPacking(prev => ({ ...prev, number_of_packages: e.target.value }))}
+                                                        />
+                                                        <input
+                                                            type="number"
+                                                            placeholder="Net Weight (Kg) *"
+                                                            step="0.01"
+                                                            className="p-2 border border-gray-600 rounded-lg bg-gray-700 text-white placeholder-gray-400"
+                                                            value={currentPacking.net_weight}
+                                                            onChange={e => setCurrentPacking(prev => ({ ...prev, net_weight: e.target.value }))}
+                                                        />
+                                                        <input
+                                                            type="number"
+                                                            placeholder="Gross Weight (Kg) *"
+                                                            step="0.01"
+                                                            className="p-2 border border-gray-600 rounded-lg bg-gray-700 text-white placeholder-gray-400"
+                                                            value={currentPacking.gross_weight}
+                                                            onChange={e => setCurrentPacking(prev => ({ ...prev, gross_weight: e.target.value }))}
+                                                        />
+                                                    </div>
+                                                    <div className="grid grid-cols-3 gap-2">
+                                                        <input
+                                                            type="number"
+                                                            placeholder="Length (cm)"
+                                                            className="p-2 border border-gray-600 rounded-lg bg-gray-700 text-white placeholder-gray-400"
+                                                            value={currentPacking.length}
+                                                            onChange={e => setCurrentPacking(prev => ({ ...prev, length: e.target.value }))}
+                                                        />
+                                                        <input
+                                                            type="number"
+                                                            placeholder="Width (cm)"
+                                                            className="p-2 border border-gray-600 rounded-lg bg-gray-700 text-white placeholder-gray-400"
+                                                            value={currentPacking.width}
+                                                            onChange={e => setCurrentPacking(prev => ({ ...prev, width: e.target.value }))}
+                                                        />
+                                                        <input
+                                                            type="number"
+                                                            placeholder="Height (cm)"
+                                                            className="p-2 border border-gray-600 rounded-lg bg-gray-700 text-white placeholder-gray-400"
+                                                            value={currentPacking.height}
+                                                            onChange={e => setCurrentPacking(prev => ({ ...prev, height: e.target.value }))}
+                                                        />
+                                                    </div>
+
+                                                    <div className="flex gap-2">
+                                                        <button
+                                                            className={`flex-1 px-4 py-2 rounded-lg transition-colors text-sm ${(!currentPacking.product_index || !currentPacking.number_of_packages || !currentPacking.net_weight || !currentPacking.gross_weight)
+                                                                ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                                                                : 'bg-manu-green text-white hover:bg-green-600'
+                                                                }`}
+                                                            onClick={handleAddPackingInfo}
+                                                            disabled={!currentPacking.product_index || !currentPacking.number_of_packages || !currentPacking.net_weight || !currentPacking.gross_weight}
+                                                        >
+                                                            Add Packing Info
+                                                        </button>
+                                                        <button
+                                                            className={`flex-1 px-4 py-2 rounded-lg transition-colors text-sm ${packingInfo.length === 0
+                                                                ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                                                                : 'bg-blue-600 text-white hover:bg-blue-700'
+                                                                }`}
+                                                            onClick={handleFinishPacking}
+                                                            disabled={packingInfo.length === 0}
+                                                        >
+                                                            Finish ({packingInfo.length} added)
+                                                        </button>
+                                                    </div>
+
+                                                    {packingInfo.length > 0 && (
+                                                        <div className="mt-3 p-3 bg-gray-600 border border-gray-500 rounded">
+                                                            <h4 className="font-semibold mb-2 text-white">Packing Entries ({packingInfo.length}):</h4>
+                                                            {packingInfo.map((packing, index) => (
+                                                                <div key={packing.id} className="text-sm border-b border-gray-500 pb-2 mb-2 last:border-b-0">
+                                                                    <div className="text-white"><strong>Product {packing.product_index}</strong> - {packing.kind_of_packages}</div>
+                                                                    <div className="text-gray-300">Packages: {packing.number_of_packages} | Net: {packing.net_weight}Kg | Gross: {packing.gross_weight}Kg</div>
+                                                                    {packing.measurements && <div className="text-xs text-blue-400">Measurements: {packing.measurements}</div>}
+                                                                </div>
+                                                            ))}
                                                         </div>
-                                                    )}
-                                                    {productEntryStep === 1 && (
-                                                        <>
-                                                            <input
-                                                                type="number"
-                                                                placeholder="Quantity"
-                                                                className="w-full p-2 border border-gray-200 rounded-lg mt-2"
-                                                                value={currentProduct.quantity}
-                                                                onChange={e => setCurrentProduct({ ...currentProduct, quantity: e.target.value })}
-                                                            />
-                                                            <input
-                                                                type="number"
-                                                                placeholder="Unit Price"
-                                                                className="w-full p-2 border border-gray-200 rounded-lg mt-2"
-                                                                value={currentProduct.unitPrice}
-                                                                onChange={e => setCurrentProduct({ ...currentProduct, unitPrice: e.target.value })}
-                                                            />
-                                                            <button
-                                                                className="w-full bg-manu-green text-white px-4 py-2 rounded-lg hover:bg-green-600 transition-colors text-sm mt-2"
-                                                                onClick={() => {
-                                                                    if (!currentProduct.quantity || !currentProduct.unitPrice) {
-                                                                        alert("Please enter quantity and unit price.");
-                                                                        return;
-                                                                    }
-                                                                    // Save product
-                                                                    setProducts([currentProduct]); // Only one product
-                                                                    setUserInputs(prev => ({
-                                                                        ...prev,
-                                                                        products: [currentProduct]
-                                                                    }));
-
-                                                                    const productSummary = `Added: ${currentProduct.item} | ${currentProduct.description} | ${currentProduct.hsCode} | Qty: ${currentProduct.quantity} | Price: ${currentProduct.unitPrice}`;
-
-                                                                    setMessages(prev => [...prev, {
-                                                                        id: generateUniqueId(),
-                                                                        type: 'user',
-                                                                        content: productSummary,
-                                                                        timestamp: new Date()
-                                                                    }]);
-
-                                                                    // Disable the products input in the previous message
-                                                                    setMessages(prevMessages =>
-                                                                        prevMessages.map(msg =>
-                                                                            msg.showInput && msg.expectedField === 'products'
-                                                                                ? { ...msg, showInput: false, inputDisabled: true, userAnswer: productSummary }
-                                                                                : msg
-                                                                        )
-                                                                    );
-
-                                                                    // Reset for next question
-                                                                    setCurrentProduct({ item: '', description: '', hsCode: '', quantity: '', unitPrice: '' });
-                                                                    setProductEntryStep(0);
-                                                                    setShowSuggestions(false);
-                                                                    setFilteredItems([]);
-                                                                    setCurrentQuestion(prev => prev + 1); // Move to next question
-                                                                    setAwaitingInput(false);
-                                                                }}
-                                                            >
-                                                                Add Product
-                                                            </button>
-                                                        </>
                                                     )}
                                                 </div>
                                             )}
                                         </div>
                                     )}
 
-                                    {/* Show disabled input state with user's answer */}
-                                    {message.inputDisabled && (
-                                        <div className="mt-4 p-3 bg-gray-50 border border-gray-200 rounded-lg">
-                                            <div className="text-sm text-gray-600 mb-1">Your answer:</div>
-                                            <div className="text-sm font-medium text-gray-800">
+                                    {/* Show user answers */}
+                                    {message.inputDisabled && message.userAnswer && (
+                                        <div className="mt-4 p-3 bg-gray-600 border border-gray-500 rounded-lg">
+                                            <div className="text-sm text-gray-300 mb-1">Your answer:</div>
+                                            <div className="text-sm font-medium text-white">
                                                 ✓ {message.userAnswer}
                                             </div>
                                         </div>
                                     )}
 
-                                    {/* Download Button */}
+                                    {/* Download Buttons */}
                                     {message.showDownloadButton && (
-                                        <button
-                                            className="mt-3 bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 transition-colors text-sm"
-                                            onClick={() => {
-                                                console.log('Generated Documents:', generatedDocuments);
-                                                alert('Preview feature will be added next!');
-                                            }}
-                                        >
-                                            📥 Preview Documents
-                                        </button>
+                                        <div className="flex flex-col gap-2 mt-3">
+                                            <button
+                                                className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 transition-colors text-sm flex items-center justify-center gap-2"
+                                                onClick={downloadAllPdfs}
+                                            >
+                                                <Download size={16} />
+                                                Download All Documents
+                                            </button>
+                                            <button
+                                                className={`px-4 py-2 text-white rounded flex items-center justify-center gap-2 ${isSendingEmail ? 'bg-gray-600 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700'
+                                                    } text-sm`}
+                                                onClick={sendPdfViaEmail}
+                                                disabled={isSendingEmail}
+                                            >
+                                                <Mail size={16} />
+                                                {isSendingEmail ? 'Sending...' : 'Send via Email'}
+                                            </button>
+                                        </div>
                                     )}
 
-                                    <div className="text-xs opacity-70 mt-2">
+                                    <div className="text-xs opacity-70 mt-2 text-gray-400">
                                         {new Date(message.timestamp).toLocaleTimeString()}
                                     </div>
                                 </div>
                             </div>
                         ))}
+                        <div ref={messagesEndRef} />
                     </div>
 
-                    {/* Input Area - Hidden during questionnaire */}
-                    {!awaitingInput && (
-                        <div className="p-4 border-t border-gray-200">
+                    {/* Free-form message input */}
+                    {!awaitingInput && currentStep === 'completed' && (
+                        <div className="p-4 border-t border-gray-700">
                             <div className="flex space-x-2">
                                 <input
+                                    ref={inputRef}
                                     type="text"
-                                    placeholder="Type your message..."
-                                    className="flex-1 px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-manu-green"
+                                    placeholder="Type your message about export documents..."
+                                    className="flex-1 px-4 py-2 border border-gray-600 rounded-lg bg-gray-700 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-manu-green"
+                                    value={userMessage}
+                                    onChange={(e) => setUserMessage(e.target.value)}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter' && userMessage.trim()) {
+                                            handleSendMessage();
+                                        }
+                                    }}
                                 />
-                                <button className="bg-manu-green text-white px-4 py-2 rounded-lg hover:bg-green-600 transition-colors">
-                                    Send
+                                <button
+                                    className="bg-manu-green text-white px-4 py-2 rounded-lg hover:bg-green-600 transition-colors flex items-center gap-2"
+                                    onClick={handleSendMessage}
+                                    disabled={!userMessage.trim()}
+                                >
+                                    <Send size={16} />
                                 </button>
                             </div>
                         </div>
                     )}
                 </div>
 
-                {/* Right Panel - Template Preview */}
-                <div className="w-1/2 bg-gray-100 flex flex-col">
-                    {/* Preview Header */}
-                    <div className="p-4 border-b border-gray-200 bg-white">
-                        <div className="flex items-center space-x-3">
-                            <FileText className="text-manu-green" size={20} />
-                            <div>
-                                <h3 className="font-semibold">Document Preview</h3>
-                                <p className="text-sm text-gray-600">Live preview of your documents</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Preview Content */}
+                {/* Right Panel - Preview & Edit */}
+                <div className="w-full md:w-1/2 bg-gray-800 flex flex-col">
                     <div className="flex-1 p-4">
                         {currentStep === 'template_selection' && (
                             <div className="h-full flex items-center justify-center">
                                 <div className="text-center">
-                                    <div className="grid grid-cols-2 gap-4 mb-6">
-                                        {[
-                                            { icon: '📄', name: 'Invoice' },
-                                            { icon: '📋', name: 'Proforma' },
-                                            { icon: '📦', name: 'Packing' },
-                                            { icon: '🚛', name: 'Challan' }
-                                        ].map((item, idx) => (
-                                            <div key={idx} className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
-                                                <div className="text-2xl mb-2">{item.icon}</div>
-                                                <div className="text-sm font-medium text-gray-700">{item.name}</div>
-                                            </div>
-                                        ))}
+                                    <div className="w-16 h-16 bg-blue-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                                        <span className="text-white text-2xl">📄</span>
                                     </div>
-                                    <p className="text-gray-500 text-sm">
-                                        Choose your documents from the chat panel
+                                    <h3 className="text-lg font-semibold text-white mb-2">
+                                        Select Documents to Generate
+                                    </h3>
+                                    <p className="text-gray-400">
+                                        Choose the export documents you need from the chat interface
                                     </p>
                                 </div>
                             </div>
@@ -988,13 +2285,13 @@ const AIAgentPage = ({ user, onPageChange, onLogout, documentsUploaded = true })
                                     <div className="w-16 h-16 bg-blue-500 rounded-full flex items-center justify-center mx-auto mb-4">
                                         <span className="text-white text-xl">📝</span>
                                     </div>
-                                    <h3 className="text-lg font-semibold text-gray-700 mb-2">
-                                        Collecting Information
+                                    <h3 className="text-lg font-semibold text-white mb-2">
+                                        Collecting Export Information
                                     </h3>
-                                    <p className="text-gray-500 mb-4">
+                                    <p className="text-gray-400 mb-4">
                                         Question {currentQuestion + 1} of {questions.length}
                                     </p>
-                                    <div className="w-full bg-gray-200 rounded-full h-2">
+                                    <div className="w-full bg-gray-700 rounded-full h-2">
                                         <div
                                             className="bg-blue-500 h-2 rounded-full transition-all duration-500"
                                             style={{ width: `${((currentQuestion) / questions.length) * 100}%` }}
@@ -1010,76 +2307,139 @@ const AIAgentPage = ({ user, onPageChange, onLogout, documentsUploaded = true })
                                     <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
                                         <span className="text-white text-xl">⚡</span>
                                     </div>
-                                    <h3 className="text-lg font-semibold text-gray-700 mb-2">
+                                    <h3 className="text-lg font-semibold text-white mb-2">
                                         Generating Documents...
                                     </h3>
-                                    <p className="text-gray-500">
-                                        Please wait while we create your professional export documents
+                                    <p className="text-gray-400">
+                                        Creating professional export documents
                                     </p>
                                 </div>
                             </div>
                         )}
 
                         {currentStep === 'completed' && (
-                            <div className="bg-white rounded-lg p-6 shadow-sm h-full">
+                            <div className="bg-gray-700 rounded-lg p-6 shadow-sm h-full flex flex-col">
+                                <div className="flex gap-2 mb-4 flex-wrap">
+                                    {/* Download Dropdown */}
+                                    <div className="relative group">
+                                        <button className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-2 text-sm">
+                                            <Download size={16} />
+                                            Download ▼
+                                        </button>
+                                        <div className="absolute left-0 mt-1 w-48 bg-gray-700 border border-gray-600 rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-10">
+                                            <button
+                                                className="w-full text-left px-4 py-2 text-white hover:bg-gray-600 rounded-t-lg flex items-center gap-2 text-sm"
+                                                onClick={downloadAllPdfs}
+                                            >
+                                                <Download size={14} />
+                                                Download All Documents
+                                            </button>
+                                            <div className="border-t border-gray-600"></div>
+                                            {generatedDocuments.map((doc, i) => (
+                                                <button
+                                                    key={doc.id}
+                                                    className="w-full text-left px-4 py-2 text-white hover:bg-gray-600 flex items-center gap-2 text-sm"
+                                                    onClick={() => downloadIndividualPdf(i)}
+                                                >
+                                                    <Download size={14} />
+                                                    {doc.name}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
 
-                                <div className="flex gap-3 mb-3">
                                     <button
-                                        className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-2"
-                                        onClick={downloadAllPdfs}
-                                    >
-                                        <FileText size={16} />
-                                        Download All PDFs
-                                    </button>
-
-                                    <button
-                                        className={`px-4 py-2 text-white rounded flex items-center gap-2 ${isSendingEmail
-                                            ? 'bg-gray-400 cursor-not-allowed'
+                                        className={`px-4 py-2 text-white rounded flex items-center gap-2 text-sm ${isSendingEmail
+                                            ? 'bg-gray-600 cursor-not-allowed'
                                             : 'bg-green-600 hover:bg-green-700'
                                             }`}
                                         onClick={sendPdfViaEmail}
                                         disabled={isSendingEmail}
                                     >
-                                        <MessageCircle size={16} />
-                                        {isSendingEmail ? 'Sending...' : 'Send via Email'}
+                                        <Mail size={16} />
+                                        {isSendingEmail ? 'Sending...' : 'Email All'}
                                     </button>
+
+                                    {/* Edit Button */}
+                                    <button
+                                        className={`px-4 py-2 text-white rounded flex items-center gap-2 text-sm ${isEditing
+                                            ? 'bg-red-600 hover:bg-red-700'
+                                            : 'bg-yellow-600 hover:bg-yellow-700'
+                                            }`}
+                                        onClick={isEditing ? cancelEditing : startEditing}
+                                    >
+                                        <Edit3 size={16} />
+                                        {isEditing ? 'Cancel Editing' : 'Edit Information'}
+                                    </button>
+
+                                    {isEditing && (
+                                        <button
+                                            className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 flex items-center gap-2 text-sm"
+                                            onClick={handleSaveEdits}
+                                        >
+                                            Save Changes
+                                        </button>
+                                    )}
                                 </div>
 
-
-                                {/* Tabs for each template */}
-                                {generatedDocuments.length > 1 && (
-                                    <div className="flex space-x-2 border-b pb-2 mb-3">
-                                        {generatedDocuments.map((doc, i) => (
-                                            <button
-                                                key={doc.id}
-                                                onClick={() => setActiveDocIndex(i)}
-                                                className={`px-4 py-1 rounded-t ${activeDocIndex === i ? 'bg-manu-green text-white' : 'bg-gray-200 text-gray-700'} text-sm font-semibold`}
-                                            >
-                                                {doc.name}
-                                            </button>
-                                        ))}
+                                {/* Edit Tabs */}
+                                {isEditing && (
+                                    <div className="mb-4 border-b border-gray-600">
+                                        <div className="flex space-x-1 overflow-x-auto">
+                                            {Object.keys(questionsByCategory).map(category => (
+                                                <button
+                                                    key={category}
+                                                    onClick={() => setActiveEditTab(category)}
+                                                    className={`px-4 py-2 text-sm font-medium rounded-t ${activeEditTab === category
+                                                        ? 'bg-manu-green text-white'
+                                                        : 'bg-gray-600 text-gray-300 hover:bg-gray-500'
+                                                        }`}
+                                                >
+                                                    {category.charAt(0).toUpperCase() + category.slice(1)}
+                                                </button>
+                                            ))}
+                                        </div>
                                     </div>
                                 )}
 
+                                {isEditing ? (
+                                    <div className="flex-1 overflow-auto">
+                                        {renderEditForm()}
+                                    </div>
+                                ) : (
+                                    <>
+                                        {generatedDocuments.length > 0 && (
+                                            <div className="flex space-x-2 border-b border-gray-600 pb-2 mb-4 overflow-x-auto">
+                                                {generatedDocuments.map((doc, i) => (
+                                                    <div key={doc.id} className="flex items-center space-x-1">
+                                                        <div className="relative group">
+                                                            <button
+                                                                onClick={() => setActiveDocIndex(i)}
+                                                                className={`px-4 py-1 rounded-t ${activeDocIndex === i ? 'bg-manu-green text-white' : 'bg-gray-600 text-gray-300'} text-sm font-semibold whitespace-nowrap flex items-center gap-2 pr-8`}
+                                                            >
+                                                                {doc.name}
+                                                            </button>
+                                                            {/* Download icon positioned absolutely */}
+                                                            <button
+                                                                onClick={() => downloadIndividualPdf(i)}
+                                                                className={`absolute right-1 top-1/2 transform -translate-y-1/2 p-1 transition-colors ${activeDocIndex === i ? 'text-white hover:text-yellow-300' : 'text-gray-400 hover:text-yellow-300'}`}
+                                                                title={`Download ${doc.name}`}
+                                                            >
+                                                                <Download size={14} />
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
 
-
-
-
-                                {/* Preview HTML */}
-                                <div style={{ minHeight: 500 }}>
-                                    {generatedDocuments.length > 0 && (
-                                        <div
-                                            className="document-html-preview"
-                                            dangerouslySetInnerHTML={{ __html: generatedDocuments[activeDocIndex]?.html }}
-                                        />
-                                    )}
-                                    {generatedDocuments.length === 0 && (
-                                        <div className="text-gray-500">No preview available.</div>
-                                    )}
-                                </div>
+                                        <div className="flex-1 overflow-auto bg-white rounded-lg">
+                                            {renderDocumentPreview()}
+                                        </div>
+                                    </>
+                                )}
                             </div>
                         )}
-
                     </div>
                 </div>
             </div>

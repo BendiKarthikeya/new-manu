@@ -1,365 +1,269 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Play, Pause } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { Play, ArrowRight } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import EarthBackground from './EarthBackground';
 
 const HeroSection = ({ isMobile, user }) => {
     const navigate = useNavigate();
-    const [isPlaying, setIsPlaying] = useState(true);
-    const [searchQuery, setSearchQuery] = useState('');
     const [showAuthPrompt, setShowAuthPrompt] = useState(false);
-    const videoRef = useRef(null);
-
-    // Video autoplay handling - SAFE VERSION
-    useEffect(() => {
-        if (videoRef.current) {
-            if (isMobile) {
-                videoRef.current.pause();
-                setIsPlaying(false);
-            } else {
-                // Delay to ensure DOM is ready
-                const timer = setTimeout(() => {
-                    if (videoRef.current) {
-                        videoRef.current.play()
-                            .then(() => {
-                                setIsPlaying(true);
-                            })
-                            .catch((error) => {
-                                console.warn('Video autoplay failed:', error);
-                                setIsPlaying(false);
-                            });
-                    }
-                }, 500);
-
-                return () => clearTimeout(timer);
-            }
-        }
-    }, [isMobile]);
-
-    const toggleVideo = () => {
-        if (videoRef.current) {
-            if (isPlaying) {
-                videoRef.current.pause();
-                setIsPlaying(false);
-            } else {
-                videoRef.current.play()
-                    .then(() => {
-                        setIsPlaying(true);
-                    })
-                    .catch((error) => {
-                        console.warn('Video play failed:', error);
-                        setIsPlaying(false);
-                    });
-            }
-        }
-    };
-
-    const handleSearchClick = () => {
-        if (user) {
-            // If logged in, go to AI agent
-            navigate('/ai-agent');
-        } else {
-            // If not logged in, show auth prompt
-            setShowAuthPrompt(true);
-            const timer = setTimeout(() => {
-                navigate('/auth');
-                setShowAuthPrompt(false);
-            }, 1500);
-
-            // Cleanup timer if component unmounts
-            return () => clearTimeout(timer);
-        }
-    };
 
     const handleNavigation = (path, requiresAuth = false) => {
         if (requiresAuth && !user) {
-            navigate('/auth');
+            setShowAuthPrompt(true);
+            setTimeout(() => {
+                navigate('/auth');
+                setShowAuthPrompt(false);
+            }, 1500);
         } else {
             navigate(path);
         }
     };
 
-    const handleKeyDown = (e) => {
-        if (e.key === 'Enter') {
-            handleSearchClick();
-        }
-    };
+    const closeAuthPrompt = () => setShowAuthPrompt(false);
 
-    const getUserDisplayName = () => {
-        if (!user) return '';
-        return user.user_metadata?.full_name || user.email?.split('@')[0] || 'User';
-    };
-
-    const handleImageError = (e) => {
-        e.target.style.display = 'none';
-        const fallback = e.target.parentElement.querySelector('.e-cha-fallback');
-        if (fallback) {
-            fallback.style.display = 'flex';
-        }
-        console.warn('E-CHA agent image failed to load');
-    };
-
-    const closeAuthPrompt = () => {
-        setShowAuthPrompt(false);
-    };
-
-    // Animation variants
     const containerVariants = {
-        hidden: { opacity: 0, x: -50 },
+        hidden: { opacity: 0, x: -20 },
         visible: {
             opacity: 1,
             x: 0,
-            transition: { duration: 0.8 }
-        }
+            transition: { duration: 0.5, ease: 'easeOut' },
+        },
     };
 
     const rightSideVariants = {
-        hidden: { opacity: 0, x: 50 },
+        hidden: { opacity: 0, x: 20, scale: 0.9 },
         visible: {
             opacity: 1,
             x: 0,
-            transition: { duration: 0.8, delay: 0.2 }
-        }
+            scale: 1,
+            transition: { duration: 0.5, delay: 0.15, ease: 'easeOut' },
+        },
     };
 
     const floatingAnimation = {
-        animate: { y: [0, -10, 0] },
-        transition: { duration: 2, repeat: Infinity, ease: "easeInOut" }
+        animate: { y: [0, -8, 0] },
+        transition: { duration: 3, repeat: Infinity, ease: 'easeInOut' },
+    };
+
+    const textGlowAnimation = {
+        animate: { backgroundPosition: ['0% 50%', '100% 50%', '0% 50%'] },
+        transition: { duration: 4, repeat: Infinity, ease: 'linear' },
     };
 
     return (
-        <section className="relative h-screen overflow-hidden bg-gradient-to-br from-manu-dark via-gray-800 to-manu-green">
-            {/* Background Video */}
-            <div className="absolute inset-0 z-0">
-                {!isMobile ? (
-                    <video
-                        ref={videoRef}
-                        className="w-full h-full object-cover opacity-30"
-                        loop
-                        muted
-                        playsInline
-                        poster="/images/hero-fallback.jpg"
-                        onError={() => {
-                            console.warn('Hero video failed to load');
-                        }}
-                    >
-                        <source src="/videos/hero-video-ship.mp4" type="video/mp4" />
-                        Your browser does not support the video tag.
-                    </video>
-                ) : (
-                    <div
-                        className="w-full h-full bg-cover bg-center opacity-30"
-                        style={{
-                            backgroundImage: 'url(/images/hero-fallback.jpg)',
-                            backgroundSize: 'cover',
-                            backgroundPosition: 'center',
-                            backgroundRepeat: 'no-repeat'
-                        }}
-                    />
-                )}
+        <section className="relative min-h-screen w-full overflow-hidden bg-black">
+            {/* ✅ INTERACTIVE 3D EARTH BACKGROUND - SEO Friendly */}
+            <EarthBackground />
 
-                {/* Video Controls */}
-                {!isMobile && (
-                    <button
-                        onClick={toggleVideo}
-                        className="absolute bottom-4 right-4 z-10 bg-black/50 text-white p-3 rounded-full hover:bg-black/70 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-white focus:ring-opacity-50"
-                        aria-label={isPlaying ? "Pause video" : "Play video"}
-                    >
-                        {isPlaying ? <Pause size={20} /> : <Play size={20} />}
-                    </button>
-                )}
-            </div>
+            {/* Subtle dark overlay for better text readability */}
+            <div className="absolute inset-0 bg-black/40 z-10" />
 
-            {/* Hero Content */}
-            <div className="relative z-10 h-full flex items-center">
-                <div className="container mx-auto px-4 grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
+            {/* ✅ Hero Content */}
+            <div className="relative z-20 flex flex-col lg:flex-row items-center justify-start min-h-screen w-full px-4 sm:px-6 lg:px-12 py-6 mt-8">
 
-                    {/* Left Side - Text Content */}
-                    <motion.div
-                        initial="hidden"
-                        animate="visible"
-                        variants={containerVariants}
-                        className="text-white space-y-6"
-                    >
-                        {/* Welcome message for logged in users */}
-                        {user && (
+                {/* Left Side - Content */}
+                <motion.div
+                    initial="hidden"
+                    animate="visible"
+                    variants={containerVariants}
+                    className="flex-1 w-full text-white space-y-4 lg:space-y-6 mt-12 lg:mt-0 lg:pr-4  bg-black/40 rounded-3xl p-8 lg:p-12 border border-white/20 shadow-2xl"
+                >
+                    <div className="space-y-3">
+                        <motion.h1
+                            className="text-2xl sm:text-3xl md:text-4xl lg:text-4xl xl:text-5xl font-extrabold leading-tight text-left"
+                            initial="hidden"
+                            animate="visible"
+                            variants={{
+                                hidden: {},
+                                visible: { transition: { staggerChildren: 0.15 } },
+                            }}
+                        >
                             <motion.div
-                                initial={{ opacity: 0, y: 20 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                transition={{ delay: 0.5 }}
-                                className="bg-manu-green/20 border border-manu-green/30 rounded-lg p-4 mb-6"
+                                variants={{
+                                    hidden: { opacity: 0, y: 30 },
+                                    visible: {
+                                        opacity: 1,
+                                        y: 0,
+                                        transition: { duration: 0.8, ease: [0.25, 0.46, 0.45, 0.94] }
+                                    }
+                                }}
+                                className="overflow-hidden"
                             >
-                                <p className="text-manu-green text-sm font-medium">
-                                    👋 Welcome back, {getUserDisplayName()}!
-                                </p>
+                                AI-Powered
                             </motion.div>
-                        )}
 
-                        <h1 className="text-4xl md:text-6xl font-bold leading-tight">
-                            AI-Powered
-                            <br />
-                            <span className="text-manu-green">Export Documentation</span>
-                            <br />
-                            for Global Trade
-                        </h1>
-
-                        <p className="text-lg md:text-xl text-gray-300 max-w-lg leading-relaxed">
-                            Transform your export documentation process with AI. Upload invoices,
-                            extract data automatically, and generate professional export documents in minutes.
-                        </p>
-
-                        <div className="flex flex-col sm:flex-row gap-4">
-                            <button
-                                onClick={() => handleNavigation('/upload', true)}
-                                className="bg-manu-green text-white px-8 py-3 rounded-lg hover:bg-green-600 transition-colors duration-200 font-semibold focus:outline-none focus:ring-2 focus:ring-green-600 focus:ring-opacity-50"
+                            <motion.div
+                                variants={{
+                                    hidden: { opacity: 0, scale: 0.9 },
+                                    visible: {
+                                        opacity: 1,
+                                        scale: 1,
+                                        transition: { duration: 0.8, ease: [0.25, 0.46, 0.45, 0.94] }
+                                    }
+                                }}
+                                className=""
                             >
+                                <motion.span
+                                    className="text-manu-green bg-manu-green bg-clip-text text-transparent bg-[length:200%_auto]"
+                                    animate={textGlowAnimation.animate}
+                                    transition={textGlowAnimation.transition}
+                                >
+                                    Trade Documentation
+                                </motion.span>
+                            </motion.div>
+
+                            <motion.div
+                                variants={{
+                                    hidden: { opacity: 0, x: -40 },
+                                    visible: {
+                                        opacity: 1,
+                                        x: 0,
+                                        transition: { duration: 0.8, ease: [0.25, 0.46, 0.45, 0.94], delay: 0.3 }
+                                    }
+                                }}
+                                className=""
+                            >
+                                & Compliance
+                            </motion.div>
+                        </motion.h1>
+
+                        <motion.p
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: 0.8, duration: 0.6 }}
+                            className="text-sm sm:text-base md:text-lg text-gray-200 max-w-lg leading-relaxed text-left"
+                        >
+                            Designed for Indian MSMEs, ManuDocs handles the entire export-import process-end to end  documentation, compliance, and customs readiness on a single platform.
+                        </motion.p>
+
+                    </div>
+
+                    {/* Action Buttons */}
+                    <motion.div
+                        initial={{ opacity: 0, y: 15 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: 0.8 }}
+                        className="flex flex-col sm:flex-row gap-3 pt-4 justify-start w-full"
+                    >
+                        <motion.button
+                            whileHover={{ scale: 1.02 }}
+                            whileTap={{ scale: 0.98 }}
+                            onClick={() => handleNavigation('/upload', true)}
+                            className="group relative bg-manu-green text-white px-6 py-3 rounded-xl font-semibold shadow-lg overflow-hidden min-w-[140px]"
+                        >
+                            <div className="absolute inset-0 bg-manu-green opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                            <span className="relative flex items-center justify-center gap-2 text-sm">
                                 {user ? 'Upload Documents' : 'Get Started Free'}
-                            </button>
-                            <button
-                                onClick={() => handleNavigation('/ai-agent', true)}
-                                className="border-2 border-white text-white px-8 py-3 rounded-lg hover:bg-white hover:text-manu-dark transition-colors duration-200 font-semibold focus:outline-none focus:ring-2 focus:ring-white focus:ring-opacity-50"
-                            >
+                                <ArrowRight size={16} className="group-hover:translate-x-1 transition-transform duration-300" />
+                            </span>
+                        </motion.button>
+
+                        <motion.button
+                            whileHover={{ scale: 1.02 }}
+                            whileTap={{ scale: 0.98 }}
+                            onClick={() => handleNavigation('/ai-agent', true)}
+                            className="group relative bg-white/10  text-white px-6 py-3 rounded-xl font-semibold border border-white/20 hover:bg-white/20 transition-all duration-300 min-w-[140px]"
+                        >
+                            <span className="flex items-center justify-center gap-2 text-sm">
                                 {user ? 'Generate Documents' : 'Watch Demo'}
-                            </button>
-
-                            <button
-                                onClick={() => handleNavigation('/ai-agent-2')}
-                                className="bg-gradient-to-r from-manu-green to-green-600 text-white px-8 py-3 rounded-lg hover:from-green-600 hover:to-green-700 transition-all duration-200 font-semibold focus:outline-none focus:ring-2 focus:ring-green-600 focus:ring-opacity-50 shadow-lg"
-                            >
-                                ASK AI AGENT!
-                            </button>
-                        </div>
-
-                        {/* Stats */}
-                        <div className="grid grid-cols-3 gap-6 pt-8">
-                            <div className="text-center">
-                                <div className="text-2xl md:text-3xl font-bold text-manu-green mb-2 -mt-3">100%</div>
-                                <div className="text-sm text-gray-300">Accuracy Rate</div>
-                            </div>
-                            <div className="text-center">
-                                <div className="text-2xl md:text-3xl font-bold text-manu-green mb-2 -mt-3">3 Min</div>
-                                <div className="text-sm text-gray-300">Avg. Processing</div>
-                            </div>
-                            <div className="text-center">
-                                <div className="text-2xl md:text-3xl font-bold text-manu-green mb-2 -mt-3">1000+</div>
-                                <div className="text-sm text-gray-300">Documents Generated</div>
-                            </div>
-                        </div>
+                                <Play size={14} />
+                            </span>
+                        </motion.button>
                     </motion.div>
+                </motion.div>
 
-                    {/* Right Side - E-CHA AI Agent */}
-                    <motion.div
-                        initial="hidden"
-                        animate="visible"
-                        variants={rightSideVariants}
-                        className="flex justify-center"
-                    >
-                        <div className="relative">
-                            {/* E-CHA Character */}
-                            <motion.div
-                                animate={floatingAnimation.animate}
-                                transition={floatingAnimation.transition}
-                                className="relative"
-                            >
-                                {/* AI Agent Image */}
-                                <img
-                                    src="https://i.postimg.cc/sxfmMMsk/20250928-1634-image.png"
-                                    alt="E-CHA AI Agent - Your intelligent document processing assistant"
-                                    className="w-80 h-80 md:w-96 md:h-96 object-contain drop-shadow-2xl"
-                                    onError={handleImageError}
-                                    loading="eager"
+                {/* Right Side - Demo Video Card */}
+                <motion.div
+                    initial="hidden"
+                    animate="visible"
+                    variants={rightSideVariants}
+                    className="flex-1 w-full flex justify-center lg:justify-end items-center py-6 lg:py-0 lg:pl-4"
+                >
+                    <div className="relative flex flex-col items-center w-full max-w-xs sm:max-w-sm lg:max-w-md">
+                        <motion.div
+                            animate={floatingAnimation.animate}
+                            transition={floatingAnimation.transition}
+                            className="relative w-full flex justify-center"
+                        >
+                            <div className="relative w-full">
+                                <motion.div
+                                    animate={{
+                                        scale: [1, 1.05, 1],
+                                        opacity: [0.2, 0.3, 0.2],
+                                    }}
+                                    transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
+                                    className="absolute -inset-4 bg-manu-green rounded-3xl blur-xl"
                                 />
-
-                                {/* Fallback placeholder */}
-                                <div className="e-cha-fallback hidden w-80 h-80 md:w-96 md:h-96 bg-gradient-to-br from-manu-green to-green-600 rounded-full flex items-center justify-center shadow-2xl">
-                                    <div className="text-white text-center">
-                                        <div className="text-6xl mb-4">🤖</div>
-                                        <div className="text-xl font-bold">E-CHA</div>
-                                        <div className="text-sm opacity-80">AI Agent</div>
-                                    </div>
+                                <div className="relative  bg-black/50 rounded-3xl p-4  border border-manu-green/30 z-10">
+                                    <iframe
+                                        className="w-full aspect-video rounded-2xl "
+                                        src="https://www.youtube.com/embed/AKcC0XKgtPM?controls=1&modestbranding=1&rel=0&showinfo=0"
+                                        title="ManuDocs Platform Demo"
+                                        frameBorder="0"
+                                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                        allowFullScreen
+                                    />
                                 </div>
+                            </div>
+                        </motion.div>
 
-                                {/* Floating Search Bar */}
-                                <div className="absolute bottom-16 left-1/2 transform -translate-x-1/2 w-full max-w-sm px-4">
-                                    <motion.div
-                                        whileHover={{ scale: 1.05 }}
-                                        className="bg-white/90 backdrop-blur-md rounded-full p-3 shadow-2xl"
-                                    >
-                                        <div className="flex items-center space-x-3">
-                                            <Search className="text-manu-green flex-shrink-0" size={20} />
-                                            <input
-                                                type="text"
-                                                value={searchQuery}
-                                                onChange={(e) => setSearchQuery(e.target.value)}
-                                                placeholder={user ? "Generate invoice..." : "Try E-CHA - Sign up first!"}
-                                                className="flex-1 bg-transparent outline-none text-manu-dark placeholder-gray-500 text-sm"
-                                                onClick={handleSearchClick}
-                                                onKeyDown={handleKeyDown}
-                                                readOnly
-                                            />
-                                            <motion.button
-                                                whileHover={{ scale: 1.1 }}
-                                                whileTap={{ scale: 0.9 }}
-                                                onClick={handleSearchClick}
-                                                className="bg-manu-green text-white p-2 rounded-full hover:bg-green-600 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-green-600 focus:ring-opacity-50 flex-shrink-0"
-                                                aria-label="Search or access AI agent"
-                                            >
-                                                <Search size={16} />
-                                            </motion.button>
-                                        </div>
-                                    </motion.div>
-                                </div>
-                            </motion.div>
-
-                            {/* Floating Elements */}
-                            <motion.div
-                                animate={{ rotate: 360 }}
-                                transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
-                                className="absolute -top-4 -right-4 w-16 h-16 bg-manu-green/20 rounded-full flex items-center justify-center"
+                        <motion.div
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ duration: 0.6, delay: 0.4 }}
+                            className="mt-6 w-full flex justify-center"
+                        >
+                            <motion.a
+                                href="https://payments.cashfree.com/forms?code=manudocs"
+                                whileHover={{ scale: 1.05 }}
+                                whileTap={{ scale: 0.95 }}
+                                className="px-10 py-6 bg-manu-green text-white font-extrabold rounded-lg shadow-lg hover:shadow-xl transition-all duration-300 hover:bg-manu-green/90"
                             >
-                                <div className="w-8 h-8 bg-manu-green rounded-full"></div>
-                            </motion.div>
-
-                            <motion.div
-                                animate={{ y: [0, -15, 0] }}
-                                transition={{ duration: 3, repeat: Infinity, ease: "easeInOut", delay: 1 }}
-                                className="absolute -bottom-4 -left-4 w-12 h-12 bg-white/20 rounded-full flex items-center justify-center"
-                            >
-                                <div className="w-6 h-6 bg-white rounded-full"></div>
-                            </motion.div>
-                        </div>
-                    </motion.div>
-                </div>
+                                Support Us / Invest in ManuDocs!
+                            </motion.a>
+                        </motion.div>
+                    </div>
+                </motion.div>
             </div>
 
             {/* Auth Prompt Modal */}
-            {showAuthPrompt && (
-                <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
-                    onClick={closeAuthPrompt}
-                >
+            <AnimatePresence>
+                {showAuthPrompt && (
                     <motion.div
-                        initial={{ scale: 0.8, opacity: 0 }}
-                        animate={{ scale: 1, opacity: 1 }}
-                        exit={{ scale: 0.8, opacity: 0 }}
-                        className="bg-white rounded-lg p-8 text-center max-w-md mx-4 shadow-2xl"
-                        onClick={(e) => e.stopPropagation()}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 "
+                        onClick={closeAuthPrompt}
                     >
-                        <div className="text-4xl mb-4">🤖</div>
-                        <h3 className="text-xl font-bold text-manu-dark mb-2">
-                            Hello! I'm E-CHA
-                        </h3>
-                        <p className="text-gray-600 mb-6">
-                            To help you with document processing, please sign up or log in first.
-                        </p>
-                        <div className="w-full bg-manu-green h-2 rounded-full animate-pulse mb-4"></div>
-                        <p className="text-sm text-gray-500">Redirecting to authentication...</p>
+                        <motion.div
+                            initial={{ scale: 0.9, opacity: 0, y: 10 }}
+                            animate={{ scale: 1, opacity: 1, y: 0 }}
+                            exit={{ scale: 0.9, opacity: 0, y: 10 }}
+                            className="bg-gradient-to-br from-gray-900 to-manu-dark rounded-2xl p-6 text-center max-w-sm mx-4 shadow-2xl border border-manu-green/20"
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <motion.div animate={{ scale: [1, 1.05, 1] }} transition={{ duration: 1.5, repeat: Infinity }} className="text-4xl mb-4">
+                                🤖
+                            </motion.div>
+                            <h3 className="text-xl font-bold text-white mb-2">Hello! I'm E-CHA</h3>
+                            <p className="text-gray-300 mb-4 text-sm">
+                                To help you with document processing, please sign up or log in first.
+                            </p>
+                            <div className="w-full bg-manu-green/30 h-1.5 rounded-full overflow-hidden mb-3">
+                                <motion.div
+                                    initial={{ width: '0%' }}
+                                    animate={{ width: '100%' }}
+                                    transition={{ duration: 1.5, ease: 'easeInOut' }}
+                                    className="h-full bg-manu-green rounded-full"
+                                />
+                            </div>
+                            <p className="text-xs text-gray-400">Redirecting to authentication...</p>
+                        </motion.div>
                     </motion.div>
-                </motion.div>
-            )}
+                )}
+            </AnimatePresence>
         </section>
     );
 };
